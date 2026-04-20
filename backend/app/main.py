@@ -1,0 +1,55 @@
+import os
+from contextlib import asynccontextmanager
+
+from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+load_dotenv()
+
+from app.db.base import Base  # noqa: E402
+from app.db.seed import seed_database  # noqa: E402
+from app.db.session import SessionLocal, engine  # noqa: E402
+from app.models import order, order_item, product, user  # noqa: F401, E402
+from app.routers.chat import router as chat_router  # noqa: E402
+from app.routers.orders import router as orders_router  # noqa: E402
+from app.routers.products import router as products_router  # noqa: E402
+from app.routers.users import router as users_router  # noqa: E402
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        seed_database(db)
+        if os.getenv("OPENAI_API_KEY"):
+            from app.agent.rag import embed_products
+            from app.models.product import Product as ProductModel
+
+            products = db.query(ProductModel).all()
+            embed_products(products)
+        else:
+            print("[RAG] OPENAI_API_KEY not set — skipping product embedding")
+    except Exception as e:
+        db.rollback()
+        print(f"Startup error: {e}")
+    finally:
+        db.close()
+    yield
+
+
+app = FastAPI(title="Ecommerce AI Assistant API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(users_router)
+app.include_router(products_router)
+app.include_router(orders_router)
+app.include_router(chat_router)
