@@ -12,6 +12,7 @@ from app.db.seed import seed_database  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.models import order, order_item, product, user  # noqa: F401, E402
 from app.routers.chat_v1 import router as chat_v1_router  # noqa: E402
+from app.routers.chat_v2 import router as chat_v2_router  # noqa: E402
 from app.routers.orders import router as orders_router  # noqa: E402
 from app.routers.products import router as products_router  # noqa: E402
 from app.routers.users import router as users_router  # noqa: E402
@@ -53,3 +54,4 @@ app.include_router(users_router)
 app.include_router(products_router)
 app.include_router(orders_router)
 app.include_router(chat_v1_router, prefix="/v1")
+app.include_router(chat_v2_router, prefix="/v2")
