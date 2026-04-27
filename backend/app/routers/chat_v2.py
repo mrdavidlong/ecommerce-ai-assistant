@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from sqlalchemy.orm import Session
 
 from app.agent.v2.agent import run_agent_v2
@@ -8,18 +7,12 @@ from app.schemas.chat import AgentStep, CartAction, ChatRequest, ChatResponse
 
 router = APIRouter(prefix="/chat", tags=["chat-v2"])
 
-# In-memory history for v2; MemorySaver inside the graph owns state across turns,
-# but we still track messages here to pass as initial context on reconnect.
-_history: dict[str, list[BaseMessage]] = {}
-
 
 @router.post("/", response_model=ChatResponse)
 def chat(payload: ChatRequest, db: Session = Depends(get_db)):
-    history = _history.setdefault(payload.session_id, [])
-
     try:
         response_text, raw_steps, raw_cart, agent_name = run_agent_v2(
-            db, payload.user_id, payload.message, payload.session_id, history
+            db, payload.user_id, payload.message, payload.session_id
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Agent error: {e}")
@@ -35,10 +28,6 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)):
         )
         for a in raw_cart
     ]
-
-    history.append(HumanMessage(content=payload.message))
-    history.append(AIMessage(content=response_text))
-    _history[payload.session_id] = history[-20:]
 
     return ChatResponse(
         response=response_text,

@@ -1,4 +1,4 @@
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
 
 from app.agent.v2.state import ShoppingState
@@ -15,7 +15,7 @@ def make_general_node(llm: ChatOpenAI):
         response = llm.invoke([SystemMessage(content=_SYSTEM)] + state["messages"])
         return {
             "messages": [response],
-            "steps": state.get("steps", []),
+            "steps": state["steps"],
         }
 
     return general_node

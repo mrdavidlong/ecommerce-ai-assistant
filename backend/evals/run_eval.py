@@ -61,7 +61,7 @@ def _make_target(version: str):
                     return {"response": "No user found", "steps": [], "agent_name": "unknown"}
                 session_id = f"eval-{uuid.uuid4().hex[:8]}"
                 response, steps, _, agent_name = run_agent_v2(
-                    db, str(user.id), inputs["message"], session_id, []
+                    db, str(user.id), inputs["message"], session_id
                 )
                 return {"response": response, "steps": steps, "agent_name": agent_name}
             finally:

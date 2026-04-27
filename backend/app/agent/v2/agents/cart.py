@@ -25,7 +25,7 @@ def make_cart_node(llm: ChatOpenAI, db: Session, user_id: str, cart_actions: lis
         result = agent.invoke({"messages": state["messages"]})
         return {
             "messages": result["messages"],
-            "steps": state.get("steps", []) + extract_steps(result["messages"]),
+            "steps": state["steps"] + extract_steps(result["messages"]),
         }
 
     return cart_node

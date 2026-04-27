@@ -5,6 +5,7 @@ from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from sqlalchemy.orm import Session
 
+from app.agent.shared.response import extract_last_response
 from app.agent.shared.tools import make_tools
 
 SYSTEM_PROMPT = (
@@ -58,10 +59,5 @@ def run_agent_v1(
                 }
             )
 
-    response = ""
-    for msg in reversed(messages):
-        if isinstance(msg, AIMessage) and not msg.tool_calls:
-            response = str(msg.content)
-            break
-
+    response = extract_last_response(messages)
     return response or "I'm sorry, I couldn't process that request.", steps, cart_actions

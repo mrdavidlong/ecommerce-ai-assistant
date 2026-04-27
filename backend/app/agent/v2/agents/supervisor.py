@@ -24,7 +24,7 @@ def make_supervisor_node(llm: ChatOpenAI):
         )
         return {
             "agent_name": decision.route,
-            "steps": state.get("steps", [])
+            "steps": state["steps"]
             + [
                 {
                     "tool": "supervisor",

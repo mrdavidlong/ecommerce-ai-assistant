@@ -1,6 +1,7 @@
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from sqlalchemy.orm import Session
 
+from app.agent.shared.response import extract_last_response
 from app.agent.v2.graph import build_graph
 
 
@@ -9,7 +10,6 @@ def run_agent_v2(
     user_id: str,
     message: str,
     session_id: str,
-    history: list[BaseMessage],
 ) -> tuple[str, list[dict], list[dict], str]:
     """Run the multi-agent graph and return (response, steps, cart_actions, agent_name)."""
     cart_actions: list[dict] = []
@@ -17,8 +17,9 @@ def run_agent_v2(
 
     config = {"configurable": {"thread_id": session_id}}
 
-    initial_state = {
-        "messages": history + [HumanMessage(content=message)],
+    # Only pass the current message — MemorySaver restores prior turns via thread_id
+    initial_state: dict = {
+        "messages": [HumanMessage(content=message)],
         "agent_name": "",
         "cart_actions": [],
         "steps": [],
@@ -29,12 +30,7 @@ def run_agent_v2(
     messages: list[BaseMessage] = final_state.get("messages", [])
     steps: list[dict] = final_state.get("steps", [])
     agent_name: str = final_state.get("agent_name", "unknown")
-
-    response = ""
-    for msg in reversed(messages):
-        if isinstance(msg, AIMessage) and not msg.tool_calls:
-            response = str(msg.content)
-            break
+    response = extract_last_response(messages)
 
     fallback = "I'm sorry, I couldn't process that request."
     return response or fallback, steps, cart_actions, agent_name
