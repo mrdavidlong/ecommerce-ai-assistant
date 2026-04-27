@@ -27,3 +27,4 @@ class ChatResponse(BaseModel):
     response: str
     steps: list[AgentStep]
     cart_actions: list[CartAction] = []
+    agent_name: str = "unknown"

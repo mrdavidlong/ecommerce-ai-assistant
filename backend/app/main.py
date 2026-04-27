@@ -11,7 +11,7 @@ from app.db.base import Base  # noqa: E402
 from app.db.seed import seed_database  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.models import order, order_item, product, user  # noqa: F401, E402
-from app.routers.chat import router as chat_router  # noqa: E402
+from app.routers.chat_v1 import router as chat_v1_router  # noqa: E402
 from app.routers.orders import router as orders_router  # noqa: E402
 from app.routers.products import router as products_router  # noqa: E402
 from app.routers.users import router as users_router  # noqa: E402
@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
     try:
         seed_database(db)
         if os.getenv("OPENAI_API_KEY"):
-            from app.agent.rag import embed_products
+            from app.agent.shared.rag import embed_products
             from app.models.product import Product as ProductModel
 
             products = db.query(ProductModel).all()
@@ -52,4 +52,4 @@ app.add_middleware(
 app.include_router(users_router)
 app.include_router(products_router)
 app.include_router(orders_router)
-app.include_router(chat_router)
+app.include_router(chat_v1_router, prefix="/v1")

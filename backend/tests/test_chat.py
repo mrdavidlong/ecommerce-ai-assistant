@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.models.user import User
-from app.routers.chat import _history
+from app.routers.chat_v1 import _history
 
 
 def _seed_user(db: Session) -> User:
@@ -30,9 +30,9 @@ def clear_chat_history():
 
 def test_chat_returns_response(client: TestClient, db: Session):
     user = _seed_user(db)
-    with patch("app.routers.chat.run_agent", return_value=(MOCK_RESPONSE, MOCK_STEPS, MOCK_CART)):
+    with patch("app.routers.chat_v1.run_agent_v1", return_value=(MOCK_RESPONSE, MOCK_STEPS, MOCK_CART)):
         resp = client.post(
-            "/chat/",
+            "/v1/chat/",
             json={"user_id": str(user.id), "message": "find a webcam", "session_id": "s1"},
         )
     assert resp.status_code == 200
@@ -47,9 +47,9 @@ def test_chat_includes_steps(client: TestClient, db: Session):
     steps = [
         {"tool": "get_user_balance", "input": "", "output": "Your balance is $500.00."},
     ]
-    with patch("app.routers.chat.run_agent", return_value=("You have $500.", steps, [])):
+    with patch("app.routers.chat_v1.run_agent_v1", return_value=("You have $500.", steps, [])):
         resp = client.post(
-            "/chat/",
+            "/v1/chat/",
             json={"user_id": str(user.id), "message": "what is my balance", "session_id": "s2"},
         )
     data = resp.json()
@@ -59,9 +59,9 @@ def test_chat_includes_steps(client: TestClient, db: Session):
 
 def test_chat_no_steps_when_agent_answers_directly(client: TestClient, db: Session):
     user = _seed_user(db)
-    with patch("app.routers.chat.run_agent", return_value=("Hello! How can I help?", [], [])):
+    with patch("app.routers.chat_v1.run_agent_v1", return_value=("Hello! How can I help?", [], [])):
         resp = client.post(
-            "/chat/",
+            "/v1/chat/",
             json={"user_id": str(user.id), "message": "hi", "session_id": "s3"},
         )
     assert resp.status_code == 200
@@ -72,9 +72,9 @@ def test_chat_maintains_session_history(client: TestClient, db: Session):
     user = _seed_user(db)
     session_id = "session-memory-test"
 
-    with patch("app.routers.chat.run_agent", return_value=("First response.", [], [])):
+    with patch("app.routers.chat_v1.run_agent_v1", return_value=("First response.", [], [])):
         client.post(
-            "/chat/",
+            "/v1/chat/",
             json={"user_id": str(user.id), "message": "hello", "session_id": session_id},
         )
 
@@ -87,9 +87,9 @@ def test_chat_maintains_session_history(client: TestClient, db: Session):
         captured.append(len(history))
         return "Second response.", [], []
 
-    with patch("app.routers.chat.run_agent", side_effect=capture_history):
+    with patch("app.routers.chat_v1.run_agent_v1", side_effect=capture_history):
         client.post(
-            "/chat/",
+            "/v1/chat/",
             json={"user_id": str(user.id), "message": "follow up", "session_id": session_id},
         )
 
@@ -98,14 +98,14 @@ def test_chat_maintains_session_history(client: TestClient, db: Session):
 
 def test_chat_different_sessions_are_isolated(client: TestClient, db: Session):
     user = _seed_user(db)
-    with patch("app.routers.chat.run_agent", return_value=("Response A.", [], [])):
+    with patch("app.routers.chat_v1.run_agent_v1", return_value=("Response A.", [], [])):
         client.post(
-            "/chat/",
+            "/v1/chat/",
             json={"user_id": str(user.id), "message": "msg A", "session_id": "sess-A"},
         )
-    with patch("app.routers.chat.run_agent", return_value=("Response B.", [], [])):
+    with patch("app.routers.chat_v1.run_agent_v1", return_value=("Response B.", [], [])):
         client.post(
-            "/chat/",
+            "/v1/chat/",
             json={"user_id": str(user.id), "message": "msg B", "session_id": "sess-B"},
         )
     assert "sess-A" in _history
@@ -115,9 +115,9 @@ def test_chat_different_sessions_are_isolated(client: TestClient, db: Session):
 
 def test_chat_agent_error_returns_500(client: TestClient, db: Session):
     user = _seed_user(db)
-    with patch("app.routers.chat.run_agent", side_effect=RuntimeError("LLM unavailable")):
+    with patch("app.routers.chat_v1.run_agent_v1", side_effect=RuntimeError("LLM unavailable")):
         resp = client.post(
-            "/chat/",
+            "/v1/chat/",
             json={"user_id": str(user.id), "message": "anything", "session_id": "s-err"},
         )
     assert resp.status_code == 500
@@ -136,9 +136,9 @@ def test_chat_returns_cart_actions(client: TestClient, db: Session):
         }
     ]
     mock_return = ("Added 2 webcams to your cart.", [], cart)
-    with patch("app.routers.chat.run_agent", return_value=mock_return):
+    with patch("app.routers.chat_v1.run_agent_v1", return_value=mock_return):
         resp = client.post(
-            "/chat/",
+            "/v1/chat/",
             json={"user_id": str(user.id), "message": "add 2 webcams", "session_id": "s-cart"},
         )
     assert resp.status_code == 200
@@ -160,9 +160,9 @@ def test_chat_returns_remove_cart_action(client: TestClient, db: Session):
         }
     ]
     mock_return = ("Removed Webcam from your cart.", [], cart)
-    with patch("app.routers.chat.run_agent", return_value=mock_return):
+    with patch("app.routers.chat_v1.run_agent_v1", return_value=mock_return):
         resp = client.post(
-            "/chat/",
+            "/v1/chat/",
             json={
                 "user_id": str(user.id),
                 "message": "remove the webcam",
@@ -178,9 +178,20 @@ def test_chat_returns_remove_cart_action(client: TestClient, db: Session):
 
 def test_chat_empty_cart_actions_by_default(client: TestClient, db: Session):
     user = _seed_user(db)
-    with patch("app.routers.chat.run_agent", return_value=("Hello!", [], [])):
+    with patch("app.routers.chat_v1.run_agent_v1", return_value=("Hello!", [], [])):
         resp = client.post(
-            "/chat/",
+            "/v1/chat/",
             json={"user_id": str(user.id), "message": "hi", "session_id": "s-no-cart"},
         )
     assert resp.json()["cart_actions"] == []
+
+
+def test_chat_response_includes_agent_name(client: TestClient, db: Session):
+    user = _seed_user(db)
+    with patch("app.routers.chat_v1.run_agent_v1", return_value=("Hello!", [], [])):
+        resp = client.post(
+            "/v1/chat/",
+            json={"user_id": str(user.id), "message": "hi", "session_id": "s-agent-name"},
+        )
+    assert resp.status_code == 200
+    assert "agent_name" in resp.json()
