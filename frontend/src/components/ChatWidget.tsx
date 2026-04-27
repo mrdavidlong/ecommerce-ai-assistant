@@ -19,7 +19,27 @@ interface CartAction {
 
 type Message =
   | { role: "user"; text: string }
-  | { role: "assistant"; text: string; steps: AgentStep[] };
+  | { role: "assistant"; text: string; steps: AgentStep[]; agentName: string };
+
+const AGENT_LABELS: Record<string, string> = {
+  product: "Product Specialist",
+  account: "Account Specialist",
+  cart: "Cart Specialist",
+  general: "General Assistant",
+  unknown: "Assistant",
+};
+
+function AgentBadge({ name }: { name: string }) {
+  if (!name || name === "unknown") return null;
+  return (
+    <p className="text-xs text-gray-400 mb-1">
+      Handled by:{" "}
+      <span className="font-semibold text-purple-600">
+        {AGENT_LABELS[name] ?? name}
+      </span>
+    </p>
+  );
+}
 
 function StepsAccordion({ steps }: { steps: AgentStep[] }) {
   const [open, setOpen] = useState(false);
@@ -32,13 +52,17 @@ function StepsAccordion({ steps }: { steps: AgentStep[] }) {
         className="text-xs text-purple-600 hover:text-purple-800 flex items-center gap-1"
       >
         <span>{open ? "▼" : "▶"}</span>
-        <span>Thinking ({steps.length} step{steps.length > 1 ? "s" : ""})</span>
+        <span>
+          Thinking ({steps.length} step{steps.length > 1 ? "s" : ""})
+        </span>
       </button>
       {open && (
         <div className="mt-1 space-y-1 pl-3 border-l-2 border-purple-200">
           {steps.map((step, i) => (
             <div key={i} className="text-xs text-gray-600 bg-purple-50 rounded p-2">
-              <p className="font-mono font-semibold text-purple-700">→ {step.tool}({step.input})</p>
+              <p className="font-mono font-semibold text-purple-700">
+                → {step.tool}({step.input})
+              </p>
               <p className="mt-0.5 text-gray-500 whitespace-pre-wrap">{step.output}</p>
             </div>
           ))}
@@ -48,18 +72,25 @@ function StepsAccordion({ steps }: { steps: AgentStep[] }) {
   );
 }
 
-export default function ChatWidget({ userId, onResponse }: { userId: string; onResponse?: () => void }) {
+export default function ChatWidget({
+  userId,
+  onResponse,
+}: {
+  userId: string;
+  onResponse?: () => void;
+}) {
   const { addItem, removeItem } = useCart();
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const sessionId = useRef(
-    localStorage.getItem("chat_session_id") ?? (() => {
-      const id = crypto.randomUUID();
-      localStorage.setItem("chat_session_id", id);
-      return id;
-    })(),
+    localStorage.getItem("chat_session_id") ??
+      (() => {
+        const id = crypto.randomUUID();
+        localStorage.setItem("chat_session_id", id);
+        return id;
+      })(),
   );
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -82,7 +113,7 @@ export default function ChatWidget({ userId, onResponse }: { userId: string; onR
     setLoading(true);
 
     try {
-      const res = await fetch("http://localhost:8000/chat/", {
+      const res = await fetch("http://localhost:8000/v2/chat/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -92,14 +123,27 @@ export default function ChatWidget({ userId, onResponse }: { userId: string; onR
         }),
       });
       if (!res.ok) throw new Error(`Server error ${res.status}`);
-      const data = (await res.json()) as { response: string; steps: AgentStep[]; cart_actions: CartAction[] };
+      const data = (await res.json()) as {
+        response: string;
+        steps: AgentStep[];
+        cart_actions: CartAction[];
+        agent_name: string;
+      };
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", text: data.response, steps: data.steps ?? [] },
+        {
+          role: "assistant",
+          text: data.response,
+          steps: data.steps ?? [],
+          agentName: data.agent_name ?? "unknown",
+        },
       ]);
       for (const action of data.cart_actions ?? []) {
         if (action.action === "add") {
-          addItem({ id: action.product_id, name: action.product_name, price: action.price }, action.quantity);
+          addItem(
+            { id: action.product_id, name: action.product_name, price: action.price },
+            action.quantity,
+          );
         } else if (action.action === "remove") {
           removeItem(action.product_id);
         }
@@ -108,7 +152,12 @@ export default function ChatWidget({ userId, onResponse }: { userId: string; onR
     } catch {
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", text: "Sorry, something went wrong. Please try again.", steps: [] },
+        {
+          role: "assistant",
+          text: "Sorry, something went wrong. Please try again.",
+          steps: [],
+          agentName: "unknown",
+        },
       ]);
     } finally {
       setLoading(false);
@@ -123,7 +172,7 @@ export default function ChatWidget({ userId, onResponse }: { userId: string; onR
           <div className="bg-blue-600 text-white px-4 py-3 flex justify-between items-center">
             <div>
               <p className="font-semibold">AI Shopping Assistant</p>
-              <p className="text-xs text-blue-200">Powered by GPT-4o + RAG</p>
+              <p className="text-xs text-blue-200">Powered by GPT-4o · Multi-Agent + RAG</p>
             </div>
             <button
               type="button"
@@ -140,14 +189,22 @@ export default function ChatWidget({ userId, onResponse }: { userId: string; onR
               <div className="text-center text-gray-600 text-sm mt-8">
                 <p className="text-2xl mb-2">🤖</p>
                 <p className="font-medium text-gray-900">Ask me anything about our products!</p>
-                <p className="mt-2 text-xs text-gray-600">Try: What&apos;s good for video calls?</p>
+                <p className="mt-2 text-xs text-gray-600">
+                  Try: What&apos;s good for video calls?
+                </p>
               </div>
             )}
             {messages.map((msg, i) => (
-              <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div
+                key={i}
+                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+              >
                 <div className={`max-w-[85%] ${msg.role === "user" ? "" : "w-full"}`}>
                   {msg.role === "assistant" && (
-                    <StepsAccordion steps={msg.steps} />
+                    <>
+                      <AgentBadge name={msg.agentName} />
+                      <StepsAccordion steps={msg.steps} />
+                    </>
                   )}
                   <div
                     className={`rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap ${
