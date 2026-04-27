@@ -8,7 +8,8 @@ A full-stack ecommerce demo with an agentic AI shopping assistant. Users can bro
 |---|---|
 | Frontend | Next.js 15, React 19, Tailwind CSS 4, TypeScript |
 | Backend | FastAPI, SQLAlchemy 2, SQLite, Pydantic v2 |
-| AI Agent | LangChain, GPT-4o, ChromaDB (RAG) |
+| AI Agent | LangGraph (multi-agent), LangChain, GPT-4o, ChromaDB (RAG) |
+| Observability | LangSmith (tracing + evaluation) |
 | Package managers | `npm` (frontend), `uv` (backend) |
 
 ---
@@ -24,37 +25,31 @@ A full-stack ecommerce demo with an agentic AI shopping assistant. Users can bro
 │  │  (balance,   │◄──│  (client-side   │◄──│  (floating     │    │
 │  │   products)  │   │   cart state)   │   │   chat panel)  │    │
 │  └──────────────┘   └─────────────────┘   └───────┬────────┘    │
-│                                                   │ POST /chat/ │
+│                                               POST /v2/chat/    │
 └───────────────────────────────────────────────────┼─────────────┘
                                                     │
                               ┌─────────────────────▼───────────────┐
                               │  FastAPI  (backend)                 │
                               │                                     │
-                              │  chat router                        │
-                              │  • looks up session history         │
-                              │  • calls run_agent(...)             │
-                              │  • appends turn to history          │
-                              │  • returns response + steps +       │
-                              │    cart_actions                     │
+                              │  POST /v1/chat  ← single-agent      │
+                              │  POST /v2/chat  ← multi-agent       │
                               └─────────────────────┬───────────────┘
                                                     │
                               ┌─────────────────────▼───────────────┐
-                              │  LangChain Agent  (GPT-4o)          │
+                              │  LangGraph Multi-Agent Graph        │
                               │                                     │
-                              │  Receives: system prompt +          │
-                              │  conversation history + user msg    │
-                              │                                     │
-                              │  Loops until done:                  │
-                              │  1. Decide which tool to call       │
-                              │  2. Call tool → get result          │
-                              │  3. Reason about result             │
-                              │  4. Repeat or emit final answer     │
+                              │  [Supervisor] ← structured output   │
+                              │       │                             │
+                              │   ┌───┴──────────────────┐         │
+                              │   ▼       ▼      ▼       ▼         │
+                              │ Product Account Cart  General       │
+                              │ Agent   Agent   Agent  Agent        │
                               └──┬──────────┬────────┬──────────────┘
                                  │          │        │
                     ┌────────────▼──┐  ┌────▼────┐  ┌▼────────────────┐
                     │  ChromaDB     │  │ SQLite  │  │  OpenAI API     │
-                    │  (in-process) │  │  (DB)   │  │  (embeddings +  │
-                    │               │  │         │  │   LLM calls)    │
+                    │  (in-process) │  │  (DB)   │  │  (GPT-4o +      │
+                    │               │  │         │  │   embeddings)   │
                     │  vector index │  │ users   │  └─────────────────┘
                     │  of product   │  │ products│
                     │  descriptions │  │ orders  │
@@ -533,7 +528,8 @@ The last 20 messages are kept so the LLM has context for follow-up questions ("r
 | POST | `/orders/` | Place an order |
 | GET | `/orders/?user_id={id}` | List orders for a user |
 | POST | `/orders/{id}/refund?user_id={uid}` | Refund an order |
-| POST | `/chat/` | Send a message to the AI agent |
+| POST | `/v1/chat/` | Send a message to the single-agent (LangChain ReAct) |
+| POST | `/v2/chat/` | Send a message to the multi-agent (LangGraph, default) |
 
 Interactive docs available at `http://localhost:8000/docs`.
 
@@ -555,7 +551,10 @@ uv run uvicorn app.main:app --reload
 |----------|----------|---------|-------|
 | `OPENAI_API_KEY` | Yes | — | Get from https://platform.openai.com/api-keys |
 | `LLM_MODEL` | No | `gpt-4o` | Change to swap LLM models (e.g., `gpt-4-turbo`, `gpt-4o-mini`) |
-| `EMBEDDING_MODEL` | No | `text-embedding-3-small` | Used by ChromaDB for vector embeddings. Options: `text-embedding-3-large`, `text-embedding-ada-002` |
+| `EMBEDDING_MODEL` | No | `text-embedding-3-small` | Used by ChromaDB for vector embeddings |
+| `LANGSMITH_API_KEY` | No | — | Get from https://smith.langchain.com — enables tracing + eval |
+| `LANGSMITH_PROJECT` | No | — | LangSmith project name (e.g. `ecommerce-ai-assistant`) |
+| `LANGCHAIN_TRACING_V2` | No | — | Set to `true` to enable LangSmith tracing |
 
 API runs at `http://localhost:8000`. On first startup, the database is seeded with 3 users and 8 products (including Apple AirTag and Tile Mate for item-tracker comparison demos), and products are embedded into ChromaDB for semantic search.
 
@@ -753,14 +752,16 @@ ecommerce-ai-assistant/
 ├── backend/
 │   ├── app/
 │   │   ├── agent/
-│   │   │   ├── agent.py     # run_agent(): builds agent, extracts steps & cart_actions
-│   │   │   ├── rag.py       # ChromaDB singleton, embed_products(), search_products_rag()
-│   │   │   └── tools.py     # make_tools(): 8 LangChain tools as db/user_id/cart_actions closures
+│   │   │   ├── shared/      # rag.py (ChromaDB), tools.py (8 tools) — shared by v1 + v2
+│   │   │   ├── v1/          # agent.py: run_agent_v1() — single LangChain ReAct agent
+│   │   │   └── v2/          # LangGraph multi-agent: state.py, graph.py, agent.py
+│   │   │       └── agents/  # supervisor, product, account, cart, general nodes
 │   │   ├── db/              # Base model (UUID PK, timestamps), session, idempotent seed
 │   │   ├── models/          # User, Product, Order, OrderItem (SQLAlchemy ORM)
 │   │   ├── schemas/         # Pydantic schemas incl. ChatRequest/ChatResponse/CartAction
-│   │   ├── routers/         # orders.py, products.py, users.py, chat.py
-│   │   └── main.py          # lifespan: create_all → seed → embed products into ChromaDB
+│   │   ├── routers/         # orders.py, products.py, users.py, chat_v1.py, chat_v2.py
+│   │   └── main.py          # lifespan: create_all → seed → embed; registers /v1 and /v2
+│   ├── evals/               # LangSmith eval: dataset.py, evaluators.py, run_eval.py
 │   └── tests/               # pytest, FastAPI TestClient, dependency_overrides for test DB
 └── frontend/
     └── src/
