@@ -30,7 +30,8 @@ def clear_chat_history():
 
 def test_chat_returns_response(client: TestClient, db: Session):
     user = _seed_user(db)
-    with patch("app.routers.chat_v1.run_agent_v1", return_value=(MOCK_RESPONSE, MOCK_STEPS, MOCK_CART)):
+    mock_return = (MOCK_RESPONSE, MOCK_STEPS, MOCK_CART)
+    with patch("app.routers.chat_v1.run_agent_v1", return_value=mock_return):
         resp = client.post(
             "/v1/chat/",
             json={"user_id": str(user.id), "message": "find a webcam", "session_id": "s1"},

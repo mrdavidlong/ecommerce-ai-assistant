@@ -36,4 +36,5 @@ def run_agent_v2(
             response = str(msg.content)
             break
 
-    return response or "I'm sorry, I couldn't process that request.", steps, cart_actions, agent_name
+    fallback = "I'm sorry, I couldn't process that request."
+    return response or fallback, steps, cart_actions, agent_name
