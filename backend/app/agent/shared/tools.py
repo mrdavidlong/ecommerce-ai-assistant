@@ -7,8 +7,9 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.agent.shared.rag import search_products_rag
 from app.models.order import Order
+from app.models.order_item import OrderItem
 from app.models.product import Product
-from app.services.refund_service import apply_refund
+from app.services.refund_service import apply_item_refund
 from app.services.user_service import get_user_by_id
 
 _REFUND_WINDOW_DAYS = 30
@@ -73,11 +74,11 @@ def make_tools(db: Session, user_id: str, cart_actions: list) -> list:
 
     @tool
     def get_order_history(_: str = "") -> str:
-        """Get the current user's recent order history. Use this when the user asks about
-        their past orders or purchase history. No input needed."""
+        """Get the current user's recent order history including individual items.
+        Use this when the user asks about their past orders or purchase history. No input needed."""
         orders = (
             db.query(Order)
-            .options(selectinload(Order.items))
+            .options(selectinload(Order.items).selectinload(OrderItem.product))
             .filter(Order.user_id == uid)
             .order_by(Order.created_at.desc())
             .limit(5)
@@ -85,14 +86,17 @@ def make_tools(db: Session, user_id: str, cart_actions: list) -> list:
         )
         if not orders:
             return "You have no orders yet."
-        lines = [f"Your last {len(orders)} order(s):"]
+        lines = [f"Your last {len(orders)} order(s), newest first:"]
         for o in orders:
-            item_count = sum(item.quantity for item in o.items)
-            status = " [Already refunded — not eligible for refund]" if o.refunded else ""
+            order_status = " [Fully refunded]" if o.refunded else ""
             lines.append(
-                f"- Order #{_short_id(o.id)} on {o.created_at.strftime('%Y-%m-%d %H:%M')}: "
-                f"${o.total:.2f} ({item_count} item(s)){status}"
+                f"\nOrder #{_short_id(o.id)} on {o.created_at.strftime('%Y-%m-%d')}: "
+                f"${o.total:.2f}{order_status}"
             )
+            for item in o.items:
+                name = item.product.name if item.product else "Unknown product"
+                item_status = " [Refunded]" if item.refunded else ""
+                lines.append(f"  - {name} × {item.quantity}: ${item.price:.2f} each{item_status}")
         return "\n".join(lines)
 
     @tool
@@ -130,28 +134,41 @@ def make_tools(db: Session, user_id: str, cart_actions: list) -> list:
         return "\n".join(lines)
 
     @tool
-    def process_refund(order_id: str) -> str:
-        """Process a refund for one of the user's orders. Takes an order ID (or the first 8
-        characters shown in order history). Checks eligibility and refunds if valid."""
-        matched = (
+    def process_item_refund(order_id: str, product_name: str) -> str:
+        """Refund a specific item from an order. Takes an order ID prefix (first 8 characters
+        shown in order history) and the product name to refund. Use this when the user wants
+        to refund a particular item rather than an entire order."""
+        matched_orders = (
             db.query(Order)
+            .options(selectinload(Order.items).selectinload(OrderItem.product))
             .filter(
                 Order.user_id == uid,
                 cast(Order.id, String).like(f"{order_id.strip()}%"),
             )
             .all()
         )
-        if not matched:
+        if not matched_orders:
             return (
                 f"No order found with ID starting with '{order_id}'. "
                 "Use get_order_history to see your orders."
             )
-        if len(matched) > 1:
+        if len(matched_orders) > 1:
             return "Multiple orders match that ID prefix. Please provide more characters."
-        order = matched[0]
+        order = matched_orders[0]
 
-        if order.refunded:
-            return f"Order #{_short_id(order.id)} has already been refunded."
+        needle = product_name.lower()
+        item = next(
+            (i for i in order.items if i.product and needle in i.product.name.lower()),
+            None,
+        )
+        if not item:
+            return (
+                f"No item matching '{product_name}' found in Order #{_short_id(order.id)}. "
+                "Use get_order_history to see the items in your order."
+            )
+        if item.refunded:
+            name = item.product.name if item.product else product_name
+            return f"{name} in Order #{_short_id(order.id)} has already been refunded."
 
         age_days = (datetime.now(timezone.utc) - order.created_at.replace(tzinfo=timezone.utc)).days
         if age_days > _REFUND_WINDOW_DAYS:
@@ -164,14 +181,15 @@ def make_tools(db: Session, user_id: str, cart_actions: list) -> list:
         if not user:
             return "User not found."
         try:
-            apply_refund(db, order, user)
+            refund_amount = apply_item_refund(db, item, order, user)
         except Exception as exc:
             db.rollback()
             return f"Refund failed due to an internal error: {exc}"
 
+        name = item.product.name if item.product else product_name
         return (
-            f"Refund processed for Order #{_short_id(order.id)}. "
-            f"${order.total:.2f} has been returned to your balance. "
+            f"Refunded {name} × {item.quantity} from Order #{_short_id(order.id)}. "
+            f"${refund_amount:.2f} returned to your balance. "
             f"New balance: ${user.balance:.2f}."
         )
 
@@ -224,7 +242,7 @@ def make_tools(db: Session, user_id: str, cart_actions: list) -> list:
         get_order_history,
         get_user_balance,
         get_affordable_products,
-        process_refund,
+        process_item_refund,
         add_to_cart,
         remove_from_cart,
     ]

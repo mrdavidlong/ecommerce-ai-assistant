@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 load_dotenv()
 
@@ -21,6 +22,13 @@ from app.routers.users import router as users_router  # noqa: E402
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    with engine.connect() as conn:
+        cols = {c[1] for c in conn.execute(text("PRAGMA table_info(order_items)")).fetchall()}
+        if "refunded" not in cols:
+            conn.execute(
+                text("ALTER TABLE order_items ADD COLUMN refunded BOOLEAN NOT NULL DEFAULT 0")
+            )
+            conn.commit()
     db = SessionLocal()
     try:
         seed_database(db)
