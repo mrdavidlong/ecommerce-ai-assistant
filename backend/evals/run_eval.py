@@ -24,6 +24,47 @@ from langsmith.evaluation import evaluate  # noqa: E402
 from evals.dataset import DATASET_NAME, push_dataset  # noqa: E402
 from evals.evaluators import routing_accuracy, tool_accuracy  # noqa: E402
 
+# Original seed stock quantities — restored before each eval run
+_SEED_STOCK = {
+    "Laptop": 10,
+    "Wireless Mouse": 20,
+    "Mechanical Keyboard": 15,
+    "USB-C Hub": 18,
+    "Monitor Stand": 12,
+    "Webcam": 14,
+    "Apple AirTag": 25,
+    "Tile Mate": 30,
+}
+_SEED_BALANCE = 1000.0
+
+
+def reset_eval_db() -> None:
+    """Reset DB to a known clean state before each eval run.
+
+    Prevents cross-run pollution where a refund processed in v2's run leaves
+    the order in a refunded state, causing v1's run to fail eligibility checks
+    on the same order.
+    """
+    from app.db.session import SessionLocal
+    from app.models import order, order_item, product, user  # noqa: F401
+    from app.models.order import Order
+    from app.models.product import Product
+    from app.models.user import User
+
+    db = SessionLocal()
+    try:
+        db.query(Order).delete()
+        db.query(User).update({"balance": _SEED_BALANCE})
+        for name, qty in _SEED_STOCK.items():
+            db.query(Product).filter(Product.name == name).update({"stock_quantity": qty})
+        db.commit()
+        print("  DB reset: orders cleared, balances and stock restored.")
+    except Exception as e:
+        db.rollback()
+        print(f"  DB reset failed: {e}")
+    finally:
+        db.close()
+
 
 def _make_target(version: str):
     """Return a target function that calls run_agent_v1 or run_agent_v2 directly."""
@@ -83,6 +124,9 @@ def main():
         push_dataset()
 
     print(f"Running eval for version: {args.version}")
+    print("Resetting DB state...")
+    reset_eval_db()
+
     os.environ["LANGSMITH_PROJECT"] = "ecommerce-ai-assistant"
 
     results = evaluate(

@@ -338,8 +338,8 @@ Because it's in-memory, the index is rebuilt every time the server restarts — 
 | `compare_products` | Side-by-side price / stock / description comparison of two products. |
 | `get_user_balance` | Reads the user's current account balance from the DB. |
 | `get_affordable_products` | Filters all in-stock products to those the user can afford with their current balance. |
-| `get_order_history` | Lists the user's 5 most recent orders, with refund eligibility status on each. |
-| `process_refund` | Validates eligibility (30-day window, not already refunded, belongs to user) and atomically refunds: restores balance + stock, marks order refunded. |
+| `get_order_history` | Lists the user's 5 most recent orders (newest first) with each item's name, quantity, price, and per-item refund status. |
+| `process_item_refund` | Refunds a single item from an order by order ID prefix and product name. Validates eligibility (30-day window, item not already refunded), then atomically restores balance + stock. |
 | `add_to_cart` | Fuzzy-matches a product name, checks stock, and pushes a cart action back to the frontend so the cart sidebar updates in real time. |
 | `remove_from_cart` | Fuzzy-matches a product name and pushes a remove action to the frontend, clearing the item from the cart sidebar instantly. |
 
@@ -567,6 +567,89 @@ npm run dev
 ```
 
 App runs at `http://localhost:3000`.
+
+---
+
+## LangSmith Integration
+
+This project uses [LangSmith](https://smith.langchain.com) for two things: **automatic tracing** of every AI interaction, and **offline evaluation** of routing and tool accuracy across both the v1 and v2 agents.
+
+### Setup
+
+Add these three variables to `backend/.env`:
+
+```env
+LANGSMITH_API_KEY=lsv2_...          # from https://smith.langchain.com → Settings → API Keys
+LANGSMITH_PROJECT=ecommerce-ai-assistant
+LANGCHAIN_TRACING_V2=true
+```
+
+No code changes needed — LangChain/LangGraph picks up `LANGCHAIN_TRACING_V2=true` automatically and sends every graph invocation to LangSmith.
+
+### Automatic Tracing
+
+Once the env vars are set, every chat request to `/v2/chat/` is traced automatically:
+
+1. Start the backend: `uv run uvicorn app.main:app --reload`
+2. Send a message in the UI
+3. Go to **LangSmith → Projects → ecommerce-ai-assistant**
+4. Click any trace to see:
+   - The full LangGraph execution (Supervisor → Specialist node → END)
+   - The supervisor's routing decision and reasoning
+   - Every tool call with inputs and outputs
+   - Token usage and latency per node
+
+### Evaluation
+
+The eval suite runs 25 test queries through v1 and v2 and measures:
+
+| Evaluator | What it measures |
+|---|---|
+| `routing_accuracy` | Did the supervisor route to the correct specialist (product / account / cart / general)? |
+| `tool_accuracy` | Did the specialist call the expected tool first? |
+
+#### Step 1 — Push the dataset to LangSmith (one-time)
+
+```bash
+cd backend
+uv run python -m evals.dataset
+```
+
+This creates the `ecommerce-assistant-eval` dataset in your LangSmith account with 25 input/expected-output pairs.
+
+#### Step 2 — Run the evals
+
+```bash
+# Baseline: single-agent (LangChain ReAct)
+uv run python -m evals.run_eval --version v1
+
+# Multi-agent (LangGraph)
+uv run python -m evals.run_eval --version v2
+```
+
+Each run automatically resets the database first (clears orders, restores balances and stock to seed values) so results are reproducible regardless of prior state.
+
+#### Step 3 — View results in LangSmith
+
+1. Go to **LangSmith → Datasets & Testing → ecommerce-assistant-eval**
+2. Click the **Experiments** tab — you'll see `v1-eval-*` and `v2-eval-*` runs
+3. Click **Compare** (select both runs) to see a side-by-side metric table:
+   - `routing_accuracy`: fraction of queries routed to the correct specialist
+   - `tool_accuracy`: fraction of queries where the correct tool was called first
+4. Click any individual example row to see the full trace for that query
+
+#### Dataset categories
+
+| Category | Count | Expected agent |
+|---|---|---|
+| Product Search | 7 | product |
+| Product Compare | 3 | product |
+| Account / Balance | 4 | account |
+| Budget Shopping | 2 | product |
+| Refunds | 2 | account |
+| Cart Management | 4 | cart |
+| General / Chitchat | 3 | general |
+| **Total** | **25** | |
 
 ---
 

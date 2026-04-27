@@ -94,15 +94,15 @@ EXAMPLES = [
         "expected_tool": "get_affordable_products",
         "expected_agent": "product",
     },
-    # Refunds (2)
+    # Refunds (2) — agent calls get_order_history first to see items, then process_item_refund
     {
-        "input": "I want to refund order abc123",
-        "expected_tool": "process_refund",
+        "input": "I want to refund an item from my last order",
+        "expected_tool": "get_order_history",
         "expected_agent": "account",
     },
     {
-        "input": "can I get a refund on my last order?",
-        "expected_tool": "process_refund",
+        "input": "can I get a refund on something I bought?",
+        "expected_tool": "get_order_history",
         "expected_agent": "account",
     },
     # Cart Management (4)
