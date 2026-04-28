@@ -29,6 +29,15 @@ async def lifespan(app: FastAPI):
                 text("ALTER TABLE order_items ADD COLUMN refunded BOOLEAN NOT NULL DEFAULT 0")
             )
             conn.commit()
+        cols = {c[1] for c in conn.execute(text("PRAGMA table_info(order_items)")).fetchall()}
+        if "refunded_quantity" not in cols:
+            conn.execute(
+                text(
+                    "ALTER TABLE order_items ADD COLUMN "
+                    "refunded_quantity INTEGER NOT NULL DEFAULT 0"
+                )
+            )
+            conn.commit()
     db = SessionLocal()
     try:
         seed_database(db)

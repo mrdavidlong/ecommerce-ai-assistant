@@ -22,6 +22,7 @@ class OrderItemRead(BaseModel):
     product_name: str
     quantity: int
     price: float
+    refunded_quantity: int = 0
 
     model_config = ConfigDict(from_attributes=True)
 

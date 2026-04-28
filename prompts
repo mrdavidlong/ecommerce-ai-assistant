@@ -1,0 +1,101 @@
+  
+❯ This if for capstone project, I want to show off my knowledge on Agentic AI. I have  learned about LangChain, RAG, skills, etc. 
+     Brianstorm with me on ideas to what to build. I want to add a chatbot to help product search (product suggestion,            
+  comparision, etc.), and handle refund, and etc. Give me ideas, and ask me questions, and give me options 
+
+
+
+
+
+  ---
+  The Core Opportunity
+
+  Your ecommerce app has real data (products, users, orders, balances) — that's the perfect grounding for an agent. Instead of a
+  generic chatbot, you can build one that reasons over live data and takes real actions.
+
+  ---
+  Feature Ideas (grouped by complexity)
+
+  Tier 1 — Product Intelligence (showcases RAG)
+
+  - Semantic product search — "I need something for video calls" → embedds query, finds Webcam via vector similarity over product
+  descriptions
+  - Use-case matching — "I'm setting up a home office" → agent recommends a bundle (monitor stand + keyboard + webcam)
+  - Budget-aware suggestions — "What can I get for under $100?" → filters live product data
+  - Product comparison — "Compare the laptop vs the keyboard" → structured side-by-side with pros/cons
+
+  Tier 2 — Shopping Actions (showcases Tool Use / Agentic)
+
+  - Add to cart via chat — "Add 2 webcams to my cart" → agent calls a tool that updates the cart context
+  - Cart awareness — "What's in my cart?" / "Can I afford what's in my cart?"
+  - Balance check — "What's the most expensive thing I can buy right now?"
+
+  Tier 3 — Order & Support (showcases Multi-step Reasoning)
+
+  - Order lookup — "What did I last order?" → agent fetches order history
+  - Refund processing — "I want a refund on my last order" → agent checks eligibility, confirms with user, calls refund API
+  - Refund policy reasoning — agent applies rules (e.g. "only within 30 days") before allowing refund
+
+  Tier 4 — Advanced Patterns (showcases Multi-Agent / Memory)
+
+  - Router agent → delegates to specialist sub-agents: ShoppingAgent, SupportAgent
+  - Conversation memory — remembers "I told you I have a $200 budget" across turns
+  - ReAct loop visible in UI — show the agent's Thought → Action → Observation chain (great for demo!)
+
+  ---
+  What Skills/Tools the Agent Would Have
+
+  search_products(query, max_price?)   ← RAG over product catalog
+  get_product(product_id)              ← live DB lookup
+  compare_products(id_a, id_b)         ← structured comparison
+  get_order_history(user_id)           ← live DB lookup
+  submit_refund(order_id)              ← mutates DB
+  get_cart()                           ← reads cart state
+  add_to_cart(product_id, qty)         ← mutates cart state
+  get_user_balance(user_id)            ← live DB lookup
+
+  ---
+  Key Architecture Decision
+
+  The agent lives in the backend (Python/LangChain), and the frontend just has a chat UI that streams responses. The agent has
+  access to your existing FastAPI DB session — so it can read/write real data.
+
+
+
+
+       A router agent that delegates to a ShoppingAgent and a SupportAgent. More impressive architecturally, but significantly more 
+     complex to build and debug.
+
+
+
+
+     ❯ 1. [ ] Semantic product search (RAG)    
+  Natural language queries like 'something for video calls' matched to products via vector embeddings.                            
+  2. [ ] Product comparison               
+  Agent compares two or more products side-by-side on price, specs, and stock.
+  3. [ ] Refund handling                                                                                                          
+  Agent looks up the user's orders and processes a refund when requested, with eligibility checks.
+  4. [ ] Cart actions via chat                                                                
+  User can say 'add 2 webcams to my cart' and the agent updates the cart directly. 
+
+
+
+
+
+  Beyond RAG product search, which extra tools should the agent have? (select all you want)                                         
+                                                                                                                                  
+❯ 1. [✔] Product comparison                                                                                                       
+  Agent compares two products side-by-side: price, stock, description. Good RAG showcase — easy to implement.                     
+  2. [ ] Refund processing                                                             
+  Agent looks up order history, checks eligibility, and calls a refund API endpoint. Shows multi-step reasoning and real DB       
+  mutations.                                                                           
+  3. [ ] Add to cart via chat                                                          
+  User says 'add 2 webcams' and the agent actually updates the cart on screen. Most impressive live demo effect.                  
+  4. [ ] Balance & affordability check                                                 
+  Agent answers 'what can I afford?' by checking current balance against product prices. Simple but useful.
+  5. [ ] Type something    
+
+
+
+
+  

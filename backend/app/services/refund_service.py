@@ -20,15 +20,25 @@ def apply_refund(db: Session, order: Order, user: User) -> None:
     db.commit()
 
 
-def apply_item_refund(db: Session, item: OrderItem, order: Order, user: User) -> float:
-    """Refund a single order item. Returns the refund amount."""
-    refund_amount = item.price * item.quantity
-    item.refunded = True
+def apply_item_refund(
+    db: Session, item: OrderItem, order: Order, user: User, refund_qty: int = None
+) -> float:
+    """Refund one or more units of an order item. Returns the refund amount.
+
+    Args:
+        refund_qty: number of units to refund. If None, refunds all remaining units.
+    """
+    if refund_qty is None:
+        refund_qty = item.quantity - item.refunded_quantity
+    refund_amount = item.price * refund_qty
+    item.refunded_quantity += refund_qty
+    if item.refunded_quantity >= item.quantity:
+        item.refunded = True
     user.balance += refund_amount
 
     product = db.query(Product).filter(Product.id == item.product_id).first()
     if product:
-        product.stock_quantity += item.quantity
+        product.stock_quantity += refund_qty
 
     if all(i.refunded for i in order.items):
         order.refunded = True

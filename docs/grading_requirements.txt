@@ -1,0 +1,35 @@
+Category and sub-criteria
+=================
+Problem Definition & Use Case Clarity (20 pts)
+	Problem clarity & real-world relevance
+	User / stakeholder definition
+	Success criteria & measurable outcomes
+
+Agentic Design & System Architecture (25 pts)
+	Agent decomposition & role clarity
+	Orchestration & workflow design
+	End-to-end system completeness
+	Modularity & extensibility
+
+Quality, Grounding & Output Reliability (20 pts)
+	Output quality & usefulness
+	Grounding (RAG / data-backed outputs)
+	Output structure & consistency
+	Guardrails & hallucination control
+
+Evaluation, Iteration & Improvement (15 pts)
+	Evaluation framework
+	Use of evaluation signals
+	Evidence of improvement
+
+Technical Implementation & Integration (10 pts)
+	Tool integration & system connectivity
+	Reliability & error handling
+
+Usability, UX & Decision Support (5 pts)
+	User experience & accessibility
+	Decision support / automation value
+
+Documentation, Communication & Delivery (5 pts)
+	Documentation completeness
+	Clarity of explanation & demo

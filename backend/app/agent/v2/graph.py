@@ -14,20 +14,19 @@ from app.agent.v2.state import ShoppingState
 
 _LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
 
-# One shared checkpointer for all graph instances (in-process memory)
+# Module-level singletons — shared across all requests
+_llm = ChatOpenAI(model=_LLM_MODEL, temperature=0)
 _checkpointer = MemorySaver()
 
 
 def build_graph(db: Session, user_id: str, cart_actions: list):
-    llm = ChatOpenAI(model=_LLM_MODEL, temperature=0)
-
     builder = StateGraph(ShoppingState)
 
-    builder.add_node("supervisor", make_supervisor_node(llm))
-    builder.add_node("product", make_product_node(llm, db, user_id, cart_actions))
-    builder.add_node("account", make_account_node(llm, db, user_id, cart_actions))
-    builder.add_node("cart", make_cart_node(llm, db, user_id, cart_actions))
-    builder.add_node("general", make_general_node(llm))
+    builder.add_node("supervisor", make_supervisor_node(_llm))
+    builder.add_node("product", make_product_node(_llm, db, user_id, cart_actions))
+    builder.add_node("account", make_account_node(_llm, db, user_id, cart_actions))
+    builder.add_node("cart", make_cart_node(_llm, db, user_id, cart_actions))
+    builder.add_node("general", make_general_node(_llm))
 
     builder.set_entry_point("supervisor")
 

@@ -7,6 +7,7 @@ export interface OrderItem {
   product_name: string;
   quantity: number;
   price: number;
+  refunded_quantity?: number;
 }
 
 export interface Order {
@@ -54,21 +55,40 @@ function OrderRow({ order }: { order: Order }) {
                 <th className="pb-2 text-right">Qty</th>
                 <th className="pb-2 text-right">Unit price</th>
                 <th className="pb-2 text-right">Line total</th>
+                <th className="pb-2">Status</th>
               </tr>
             </thead>
             <tbody>
-              {order.items.map((item, idx) => (
-                <tr key={idx} className="border-t border-gray-200">
-                  <td className="py-2 text-gray-900">{item.product_name}</td>
-                  <td className="py-2 text-right text-gray-700">{item.quantity}</td>
-                  <td className="py-2 text-right text-gray-700">
-                    {formatCurrency(item.price)}
-                  </td>
-                  <td className="py-2 text-right font-medium text-gray-900">
-                    {formatCurrency(item.price * item.quantity)}
-                  </td>
-                </tr>
-              ))}
+              {order.items.map((item, idx) => {
+                const refundedQty = item.refunded_quantity ?? 0;
+                let statusBadge = null;
+                if (refundedQty === item.quantity) {
+                  statusBadge = (
+                    <span className="text-xs font-medium bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full border border-amber-200">
+                      Fully refunded
+                    </span>
+                  );
+                } else if (refundedQty > 0) {
+                  statusBadge = (
+                    <span className="text-xs font-medium bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full border border-yellow-200">
+                      {refundedQty} of {item.quantity} refunded
+                    </span>
+                  );
+                }
+                return (
+                  <tr key={idx} className="border-t border-gray-200">
+                    <td className="py-2 text-gray-900">{item.product_name}</td>
+                    <td className="py-2 text-right text-gray-700">{item.quantity}</td>
+                    <td className="py-2 text-right text-gray-700">
+                      {formatCurrency(item.price)}
+                    </td>
+                    <td className="py-2 text-right font-medium text-gray-900">
+                      {formatCurrency(item.price * item.quantity)}
+                    </td>
+                    <td className="py-2">{statusBadge}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -30,6 +30,7 @@ def _serialize_order(order: Order) -> dict:
                 product_name=item.product.name,
                 quantity=item.quantity,
                 price=item.price,
+                refunded_quantity=item.refunded_quantity,
             )
             for item in order.items
         ],

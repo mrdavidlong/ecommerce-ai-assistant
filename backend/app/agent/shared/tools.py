@@ -95,7 +95,16 @@ def make_tools(db: Session, user_id: str, cart_actions: list) -> list:
             )
             for item in o.items:
                 name = item.product.name if item.product else "Unknown product"
-                item_status = " [Refunded]" if item.refunded else ""
+                if item.refunded:
+                    item_status = " [Fully refunded]"
+                elif item.refunded_quantity > 0:
+                    remaining = item.quantity - item.refunded_quantity
+                    refunded = item.refunded_quantity
+                    item_status = (
+                        f" [{refunded} of {item.quantity} refunded, {remaining} remaining]"
+                    )
+                else:
+                    item_status = ""
                 lines.append(f"  - {name} × {item.quantity}: ${item.price:.2f} each{item_status}")
         return "\n".join(lines)
 
@@ -134,10 +143,10 @@ def make_tools(db: Session, user_id: str, cart_actions: list) -> list:
         return "\n".join(lines)
 
     @tool
-    def process_item_refund(order_id: str, product_name: str) -> str:
-        """Refund a specific item from an order. Takes an order ID prefix (first 8 characters
-        shown in order history) and the product name to refund. Use this when the user wants
-        to refund a particular item rather than an entire order."""
+    def process_item_refund(order_id: str, product_name: str, quantity: int = 1) -> str:
+        """Refund one or more units of a specific item from an order. Takes an order ID prefix
+        (first 8 characters shown in order history), the product name, and an optional quantity
+        to refund (default 1). Use this when the user wants to refund part or all of an item."""
         matched_orders = (
             db.query(Order)
             .options(selectinload(Order.items).selectinload(OrderItem.product))
@@ -166,9 +175,17 @@ def make_tools(db: Session, user_id: str, cart_actions: list) -> list:
                 f"No item matching '{product_name}' found in Order #{_short_id(order.id)}. "
                 "Use get_order_history to see the items in your order."
             )
-        if item.refunded:
+        remaining = item.quantity - item.refunded_quantity
+        if remaining == 0:
             name = item.product.name if item.product else product_name
-            return f"{name} in Order #{_short_id(order.id)} has already been refunded."
+            return f"{name} in Order #{_short_id(order.id)} has already been fully refunded."
+        if quantity > remaining:
+            return (
+                f"Can only refund {remaining} more unit(s) of {product_name} "
+                f"(requested {quantity})."
+            )
+        if quantity < 1:
+            return "Quantity must be at least 1."
 
         age_days = (datetime.now(timezone.utc) - order.created_at.replace(tzinfo=timezone.utc)).days
         if age_days > _REFUND_WINDOW_DAYS:
@@ -181,14 +198,14 @@ def make_tools(db: Session, user_id: str, cart_actions: list) -> list:
         if not user:
             return "User not found."
         try:
-            refund_amount = apply_item_refund(db, item, order, user)
+            refund_amount = apply_item_refund(db, item, order, user, quantity)
         except Exception as exc:
             db.rollback()
             return f"Refund failed due to an internal error: {exc}"
 
         name = item.product.name if item.product else product_name
         return (
-            f"Refunded {name} × {item.quantity} from Order #{_short_id(order.id)}. "
+            f"Refunded {quantity} × {name} from Order #{_short_id(order.id)}. "
             f"${refund_amount:.2f} returned to your balance. "
             f"New balance: ${user.balance:.2f}."
         )
