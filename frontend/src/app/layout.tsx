@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "~/styles/globals.css";
 import { CartProvider } from "~/contexts/CartContext";
+import ChatShell from "~/components/ChatShell";
 
 export const metadata: Metadata = {
   title: "Ecommerce Demo",
@@ -15,7 +16,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="bg-gray-50 text-gray-900 antialiased">
-        <CartProvider>{children}</CartProvider>
+        <CartProvider>
+          {children}
+          <ChatShell />
+        </CartProvider>
       </body>
     </html>
   );

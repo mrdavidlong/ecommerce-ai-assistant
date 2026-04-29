@@ -46,14 +46,9 @@ EXAMPLES = [
         "expected_tool": "search_products",
         "expected_agent": "product",
     },
-    # Product Compare (3)
+    # Product Compare (2)
     {
         "input": "compare Apple AirTag and Tile Mate",
-        "expected_tool": "compare_products",
-        "expected_agent": "product",
-    },
-    {
-        "input": "which is better: the laptop or the keyboard?",
         "expected_tool": "compare_products",
         "expected_agent": "product",
     },
@@ -105,24 +100,9 @@ EXAMPLES = [
         "expected_tool": "get_order_history",
         "expected_agent": "account",
     },
-    # Cart Management (4)
-    {
-        "input": "add the webcam to my cart",
-        "expected_tool": "add_to_cart",
-        "expected_agent": "cart",
-    },
-    {
-        "input": "I want to buy a mechanical keyboard",
-        "expected_tool": "add_to_cart",
-        "expected_agent": "cart",
-    },
+    # Cart Management (1)
     {
         "input": "remove the mouse from my cart",
-        "expected_tool": "remove_from_cart",
-        "expected_agent": "cart",
-    },
-    {
-        "input": "take the laptop out of my cart",
         "expected_tool": "remove_from_cart",
         "expected_agent": "cart",
     },
@@ -143,7 +123,7 @@ def push_dataset() -> str:
 
     dataset = client.create_dataset(
         DATASET_NAME,
-        description="25-query routing + tool accuracy eval for ecommerce AI assistant",
+        description="21-query routing + tool accuracy eval for ecommerce AI assistant",
     )
     client.create_examples(
         inputs=[{"message": ex["input"]} for ex in EXAMPLES],

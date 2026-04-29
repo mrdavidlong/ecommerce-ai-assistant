@@ -1,5 +1,5 @@
+from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
 from sqlalchemy.orm import Session
 
 from app.agent.shared.tools import make_tools
@@ -19,10 +19,10 @@ def make_cart_node(llm: ChatOpenAI, db: Session, user_id: str, cart_actions: lis
     all_tools = make_tools(db, user_id, cart_actions)
     tool_names = {"add_to_cart", "remove_from_cart", "search_products"}
     tools = [t for t in all_tools if t.name in tool_names]
-    agent = create_react_agent(llm, tools, prompt=_SYSTEM)
+    agent = create_agent(llm, tools, system_prompt=_SYSTEM)
 
     def cart_node(state: ShoppingState) -> dict:
-        result = agent.invoke({"messages": state["messages"]})
+        result = agent.invoke(state)  # type: ignore
         return {
             "messages": result["messages"],
             "steps": state["steps"] + extract_steps(result["messages"]),

@@ -4,7 +4,6 @@ import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import ProductCard, { type Product } from "~/components/ProductCard";
 import CartSidebar from "~/components/CartSidebar";
-import ChatWidget from "~/components/ChatWidget";
 import { getCurrentUser, clearCurrentUser } from "~/lib/auth";
 import { formatCurrency } from "~/lib/formatters";
 
@@ -55,6 +54,13 @@ export default function StorePage() {
     };
     void load();
   }, [fetchUser, fetchProducts, router]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const handler = () => { void fetchUser(userId); };
+    window.addEventListener("ai-response", handler);
+    return () => window.removeEventListener("ai-response", handler);
+  }, [userId, fetchUser]);
 
   function handleLogout() {
     clearCurrentUser();
@@ -114,7 +120,6 @@ export default function StorePage() {
           </div>
         </div>
       </div>
-      <ChatWidget userId={userId} onResponse={() => { void fetchUser(userId); }} />
     </div>
   );
 }

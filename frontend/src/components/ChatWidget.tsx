@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useCart } from "~/contexts/CartContext";
+import { getCurrentUser } from "~/lib/auth";
 
 interface AgentStep {
   tool: string;
@@ -72,18 +73,14 @@ function StepsAccordion({ steps }: { steps: AgentStep[] }) {
   );
 }
 
-export default function ChatWidget({
-  userId,
-  onResponse,
-}: {
-  userId: string;
-  onResponse?: () => void;
-}) {
+export default function ChatWidget() {
   const { addItem, removeItem } = useCart();
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
+
   const sessionId = useRef(
     localStorage.getItem("chat_session_id") ??
       (() => {
@@ -93,6 +90,11 @@ export default function ChatWidget({
       })(),
   );
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const user = getCurrentUser();
+    setUserId(user?.id ?? null);
+  }, []);
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -105,6 +107,7 @@ export default function ChatWidget({
   }, [messages, loading, scrollToBottom]);
 
   const send = async () => {
+    if (!userId) return;
     const text = input.trim();
     if (!text || loading) return;
 
@@ -148,7 +151,7 @@ export default function ChatWidget({
           removeItem(action.product_id);
         }
       }
-      onResponse?.();
+      window.dispatchEvent(new CustomEvent("ai-response"));
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -164,6 +167,8 @@ export default function ChatWidget({
     }
   };
 
+  if (!userId) return null;
+
   return (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end">
       {open && (
@@ -172,7 +177,7 @@ export default function ChatWidget({
           <div className="bg-blue-600 text-white px-4 py-3 flex justify-between items-center">
             <div>
               <p className="font-semibold">AI Shopping Assistant</p>
-              <p className="text-xs text-blue-200">Powered by GPT-4o · Multi-Agent + RAG</p>
+              <p className="text-xs text-blue-200">Powered by LLM · Multi-Agent + RAG</p>
             </div>
             <button
               type="button"

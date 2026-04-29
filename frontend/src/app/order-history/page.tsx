@@ -11,29 +11,44 @@ export default function HistoryPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [session, setSession] = useState<{ id: string } | null>(null);
+
+  const fetchOrders = async (userId: string) => {
+    try {
+      const res = await fetch(
+        `http://localhost:8000/orders/?user_id=${userId}`,
+      );
+      if (!res.ok) throw new Error("Failed to load orders");
+      const data = (await res.json()) as Order[];
+      setOrders(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load orders");
+    }
+  };
 
   useEffect(() => {
-    const session = getCurrentUser();
-    if (!session) {
+    const currentSession = getCurrentUser();
+    if (!currentSession) {
       router.replace("/");
       return;
     }
+    setSession(currentSession);
     const load = async () => {
       try {
-        const res = await fetch(
-          `http://localhost:8000/orders/?user_id=${session.id}`,
-        );
-        if (!res.ok) throw new Error("Failed to load orders");
-        const data = (await res.json()) as Order[];
-        setOrders(data);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to load orders");
+        await fetchOrders(currentSession.id);
       } finally {
         setLoading(false);
       }
     };
     void load();
   }, [router]);
+
+  useEffect(() => {
+    if (!session) return;
+    const handler = () => { void fetchOrders(session.id); };
+    window.addEventListener("ai-response", handler);
+    return () => window.removeEventListener("ai-response", handler);
+  }, [session]);
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">

@@ -21,7 +21,7 @@ def make_supervisor_node(llm: ChatOpenAI):
     def supervisor(state: ShoppingState) -> dict:
         decision: SupervisorDecision = router_llm.invoke(
             [SystemMessage(content=_SYSTEM)] + state["messages"]
-        )
+        )  # type: ignore
         return {
             "agent_name": decision.route,
             "steps": state["steps"]

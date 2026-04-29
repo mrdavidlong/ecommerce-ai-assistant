@@ -1,6 +1,10 @@
 # E-commerce AI Assistant
 
-A full-stack ecommerce demo with an agentic AI shopping assistant. Users can browse products, place orders, and chat with an AI that can search products, compare items, check balances, add items to the cart, and process refunds — showing its reasoning step by step.
+A full-stack ecommerce demo with an agentic AI shopping assistant. Users can browse products, place orders, and chat with an AI that can search products, compare items, check balances, add items to the shopping cart, remove items from the shoppint cart, and process refunds — showing its reasoning step by step.
+
+![AI Assistant on the store page](./images/ai-shopping-assistant-store-page.png)
+![AI Assistant on the order history page](./images/ai-shopping-assistant-order-history-page.png)
+
 
 ## Stack
 
@@ -8,7 +12,7 @@ A full-stack ecommerce demo with an agentic AI shopping assistant. Users can bro
 |---|---|
 | Frontend | Next.js 15, React 19, Tailwind CSS 4, TypeScript |
 | Backend | FastAPI, SQLAlchemy 2, SQLite, Pydantic v2 |
-| AI Agent | LangGraph (multi-agent), LangChain, GPT-4o, ChromaDB (RAG) |
+| AI Agent | LangGraph (multi-agent), LangChain, LLM, ChromaDB (RAG) |
 | Observability | LangSmith (tracing + evaluation) |
 | Package managers | `npm` (frontend), `uv` (backend) |
 
@@ -40,15 +44,15 @@ A full-stack ecommerce demo with an agentic AI shopping assistant. Users can bro
                               │                                     │
                               │  [Supervisor] ← structured output   │
                               │       │                             │
-                              │   ┌───┴──────────────────┐         │
-                              │   ▼       ▼      ▼       ▼         │
+                              │   ┌───┴──────────────────┐          │
+                              │   ▼       ▼      ▼       ▼          │
                               │ Product Account Cart  General       │
                               │ Agent   Agent   Agent  Agent        │
-                              └──┬──────────┬────────┬──────────────┘
-                                 │          │        │
-                    ┌────────────▼──┐  ┌────▼────┐  ┌▼────────────────┐
+                              └──┬──────────┬───────────┬───────────┘
+                                 │          │           │
+                    ┌────────────▼──┐  ┌────▼────┐  ┌───▼─────────────┐
                     │  ChromaDB     │  │ SQLite  │  │  OpenAI API     │
-                    │  (in-process) │  │  (DB)   │  │  (GPT-4o +      │
+                    │  (in-process) │  │  (DB)   │  │  (LLM +         │
                     │               │  │         │  │   embeddings)   │
                     │  vector index │  │ users   │  └─────────────────┘
                     │  of product   │  │ products│
@@ -61,7 +65,7 @@ A full-stack ecommerce demo with an agentic AI shopping assistant. Users can bro
 1. User types a message in `ChatWidget` → `POST /chat/` with `{user_id, message, session_id}`
 2. The chat router retrieves the conversation history for that `session_id` from an in-memory dict
 3. History + current message are passed to `run_agent`, which builds a LangChain agent with the user's tools baked in via closure
-4. GPT-4o reasons in a loop: calls tools as needed, reads their outputs, and produces a final answer
+4. LLM reasons in a loop: calls tools as needed, reads their outputs, and produces a final answer
 5. The router appends the turn to history, extracts any `cart_actions` the agent requested, and returns `{response, steps, cart_actions}`
 6. `ChatWidget` renders the response, expands the "Thinking" accordion with tool call details, and calls `CartContext.addItem` or `CartContext.removeItem` for each cart action
 7. The store page re-fetches the user's balance so it reflects any DB mutation (refund, etc.)
@@ -70,7 +74,7 @@ A full-stack ecommerce demo with an agentic AI shopping assistant. Users can bro
 
 ## AI Agent Capabilities
 
-The assistant is a **ReAct-style agent** (GPT-4o + LangChain tool-calling). It picks the right tool(s) for each request, chains multiple calls when needed, and shows its reasoning in a collapsible "Thinking" panel.
+The assistant is a **ReAct-style agent** (LLM + LangChain tool-calling). It picks the right tool(s) for each request, chains multiple calls when needed, and shows its reasoning in a collapsible "Thinking" panel.
 
 ### How the agent decides what to do
 
@@ -86,25 +90,25 @@ all_messages = history + [HumanMessage(content=message)]
 result = agent.invoke({"messages": all_messages})
 ```
 
-`create_agent` tells GPT-4o about every tool — its name, description, and parameter schema — by serialising them into the system prompt. GPT-4o then runs a **reasoning loop**:
+`create_agent` tells LLM about every tool — its name, description, and parameter schema — by serialising them into the system prompt. LLM then runs a **reasoning loop**:
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  GPT-4o reasoning loop                          │
+│  LLM    reasoning loop                          │
 │                                                 │
 │  1. Read: system prompt + history + user msg    │
 │  2. Decide: which tool (if any) to call next    │
 │  3. Emit: AIMessage with tool_calls = [...]     │
 │  4. LangChain executes the tool → ToolMessage   │
-│  5. GPT-4o reads the result, goes back to 2     │
+│  5. LLM reads the result, goes back to 2.       │
 │  6. When done: emit AIMessage with no tool_calls│
 └─────────────────────────────────────────────────┘
 ```
 
-GPT-4o communicates its tool decisions as structured JSON inside an `AIMessage`:
+LLM communicates its tool decisions as structured JSON inside an `AIMessage`:
 
 ```json
-// What GPT-4o emits when it wants to call a tool
+// What LLM emits when it wants to call a tool
 {
   "tool_calls": [
     {
@@ -116,7 +120,7 @@ GPT-4o communicates its tool decisions as structured JSON inside an `AIMessage`:
 }
 ```
 
-LangChain sees the `tool_calls` field, dispatches to the matching Python function, and appends a `ToolMessage` with the result. GPT-4o reads that result and either calls another tool or produces its final answer.
+LangChain sees the `tool_calls` field, dispatches to the matching Python function, and appends a `ToolMessage` with the result. LLM reads that result and either calls another tool or produces its final answer.
 
 ### How intermediate steps are extracted
 
@@ -149,7 +153,7 @@ for msg in reversed(messages):
 
 ### How tools are defined
 
-Every tool is a plain Python function decorated with `@tool` inside `make_tools()`. The function's docstring is what GPT-4o reads to decide when to call it:
+Every tool is a plain Python function decorated with `@tool` inside `make_tools()`. The function's docstring is what LLM reads to decide when to call it:
 
 ```python
 # tools.py — inside make_tools(db, user_id, cart_actions)
@@ -190,20 +194,20 @@ def make_tools(db, user_id, cart_actions):  # These 3 values are captured
 ```
 
 **Why closures matter here:**
-- GPT-4o calls tools with just their parameters (e.g., `search_products(query="webcam")`)
+- LLM calls tools with just their parameters (e.g., `search_products(query="webcam")`)
 - But tools also need access to `db` (to query the database), `user_id` (to check the user's balance), and `cart_actions` (to record items being added/removed)
-- Instead of passing these through GPT-4o's JSON (which would be messy), we bundle them into the tool itself as a closure
-- Result: clean tool signatures from GPT-4o's perspective, but full database access and cart mutation capability under the hood
+- Instead of passing these through LLM's JSON (which would be messy), we bundle them into the tool itself as a closure
+- Result: clean tool signatures from LLM's perspective, but full database access and cart mutation capability under the hood
 
-The docstring is the tool's contract with the model. Changing it changes when and how GPT-4o chooses to use the tool.
+The docstring is the tool's contract with the model. Changing it changes when and how LLM chooses to use the tool.
 
 ### How RAG works
 
-**RAG (Retrieval-Augmented Generation)** is the technique that powers the `search_products` tool. Instead of asking GPT-4o to recall product details from training data (which it doesn't have), we:
+**RAG (Retrieval-Augmented Generation)** is the technique that powers the `search_products` tool. Instead of asking LLM to recall product details from training data (which it doesn't have), we:
 
 1. Store product knowledge in a **vector database** (ChromaDB) at startup
 2. At query time, retrieve the most relevant products by **semantic similarity**
-3. Pass those results to GPT-4o as context so it can answer accurately
+3. Pass those results to LLM as context so it can answer accurately
 
 #### What is an embedding?
 
@@ -601,7 +605,7 @@ Once the env vars are set, every chat request to `/v2/chat/` is traced automatic
 
 ### Evaluation
 
-The eval suite runs 25 test queries through v1 and v2 and measures:
+The eval suite runs 21 test queries through v1 and v2 and measures:
 
 | Evaluator | What it measures |
 |---|---|
@@ -615,7 +619,7 @@ cd backend
 uv run python -m evals.dataset
 ```
 
-This creates the `ecommerce-assistant-eval` dataset in your LangSmith account with 25 input/expected-output pairs.
+This creates the `ecommerce-assistant-eval` dataset in your LangSmith account with 21 input/expected-output pairs.
 
 #### Step 2 — Run the evals
 
@@ -638,18 +642,57 @@ Each run automatically resets the database first (clears orders, restores balanc
    - `tool_accuracy`: fraction of queries where the correct tool was called first
 4. Click any individual example row to see the full trace for that query
 
+#### Cost & Latency Tracking
+
+LangSmith automatically tracks **cost** and **latency** for every eval query:
+
+**Where the message enters the graph:**
+
+When a user sends "take the laptop out of my cart", here's the flow:
+1. **HTTP endpoint** (`backend/app/routers/chat_v2.py:11-17`): `POST /v2/chat/` receives the message
+2. **Agent wrapper** (`backend/app/agent/v2/agent.py:21-28`): Message is wrapped in a `HumanMessage` and passed to the LangGraph
+3. **Graph invocation** (`backend/app/agent/v2/agent.py:28`): `graph.invoke(initial_state, config=config)` is where the message **enters the LangGraph** and starts flowing through the supervisor → specialist pipeline
+
+**Cost Calculation:**
+- LangSmith monitors all OpenAI API calls made during each query: supervisor LLM classification, specialist LLM tool execution, and embedding calls
+- For each call, it captures token counts: `input_tokens` and `output_tokens`
+- Cost formula: `(input_tokens × input_price_per_1k) + (output_tokens × output_price_per_1k)`
+- **Pricing source**: OpenAI's official pricing (e.g., GPT-4o: $5/1M input tokens, $15/1M output tokens as of 2024). Prices are configured in your LangSmith account settings → **Pricing** tab. You can update them if OpenAI's pricing changes, or customize for different models/providers.
+- **Total cost per run**: sum of costs across all 21 eval queries
+- **Example**: a query routing to product specialist might call: supervisor (1.5k input, 50 output) + search_products (300 input, 200 output) + embeddings (50 input, 0 output). LangSmith sums all three.
+
+**Latency Measurement:**
+- Latency is measured end-to-end: from `graph.invoke()` (line 28 in agent.py) through the supervisor routing step and specialist execution, until the final response is produced
+- Breakdown by node:
+  - **Supervisor latency**: time to classify intent + call LLM to decide routing (e.g., "this is a cart query → route to cart specialist")
+  - **Specialist latency**: time for the routed agent to call tools (search_products, add_to_cart, etc.) and generate response
+  - **Total latency**: supervisor + specialist + graph scheduling overhead
+- **Where to see it**: In the LangSmith experiment results table, the **Latency** column shows milliseconds (e.g., `5.37s`), and you can drill into each query to see the breakdown by node
+
+**Performance observations (v1 vs v2):**
+
+| Metric | v1 (Single-Agent) | v2 (Multi-Agent) | Why the difference? |
+|---|---|---|---|
+| **Latency** | Lower | Higher | v2 adds supervisor routing overhead (extra LLM call to classify intent). Expected trade-off: supervisor classifies quickly but adds latency vs v1's direct tool-calling |
+| **Total tokens** | Baseline | Fewer input tokens, similar/more output tokens | v2's supervisor+specialist pipeline is more token-efficient. The supervisor precisely routes to the right specialist, avoiding v1's exploratory tool calls (e.g., v1 might call search_products unnecessarily to "think"). Result: fewer redundant tokens, cleaner conversations. |
+| **Cost** | Baseline | Lower overall | Fewer input tokens + same model (GPT-4o) = lower cost per query. The supervisor's 1-step routing beats v1's multi-step reasoning in terms of token efficiency. |
+
+This is **expected behavior**: v2 trades a bit of latency (one extra supervisor LLM call) for better accuracy (correct specialist routed first) and lower cost (fewer wasted token calls exploring wrong tools). For the 21 eval queries, v2 is more efficient despite the supervisor overhead.
+
+![LangSmith v1 and v2 comparison](./images/ai-shopping-assistant-langsmith-evals.png)
+
 #### Dataset categories
 
 | Category | Count | Expected agent |
 |---|---|---|
 | Product Search | 7 | product |
-| Product Compare | 3 | product |
+| Product Compare | 2 | product |
 | Account / Balance | 4 | account |
 | Budget Shopping | 2 | product |
 | Refunds | 2 | account |
-| Cart Management | 4 | cart |
+| Cart Management | 1 | cart |
 | General / Chitchat | 3 | general |
-| **Total** | **25** | |
+| **Total** | **21** | |
 
 ---
 
