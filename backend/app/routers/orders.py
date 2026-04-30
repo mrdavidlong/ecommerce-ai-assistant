@@ -66,6 +66,7 @@ def create_order(payload: OrderCreate, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail=f"Insufficient stock for {product.name}")
 
     try:
+        # Keep balance, stock, order, and order items in one transaction.
         user.balance -= total
 
         order = Order(user_id=user.id, total=total)

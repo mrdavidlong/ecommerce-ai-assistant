@@ -23,7 +23,9 @@ def make_supervisor_node(llm: ChatOpenAI):
             [SystemMessage(content=_SYSTEM)] + state["messages"]
         )  # type: ignore
         return {
+            # Route label; graph.py maps this to the destination node ID.
             "agent_name": decision.route,
+            # Record routing as the first UI-visible thinking step for this turn.
             "steps": state["steps"]
             + [
                 {

@@ -555,24 +555,28 @@ class ChatSession(Base):
 
 With persistent storage, the conversation survives even if the server crashes and restarts.
 
-### How v2 history is maintained
+### How v2 graph state is maintained
 
-The default `/v2/chat/` flow does not keep a manual `_history` dict. Instead, `run_agent_v2()` passes the browser `session_id` to LangGraph as a thread ID:
+The default `/v2/chat/` flow uses LangGraph state plus `MemorySaver`, keyed by the browser `session_id`. It does not keep a manual `_history` dict:
 
 ```python
 # backend/app/agent/v2/agent.py
 config = {"configurable": {"thread_id": session_id}}
 ```
 
-The graph is compiled with `MemorySaver`, an in-memory checkpointer:
+Each request passes an `initial_state`, but fields do not all behave the same way. LangGraph applies this input as an update to the saved graph state for that thread:
 
 ```python
-# backend/app/agent/v2/graph.py
-_checkpointer = MemorySaver()
-return builder.compile(checkpointer=_checkpointer)
+# backend/app/agent/v2/agent.py
+initial_state = {
+    "messages": [HumanMessage(content=message)],
+    "agent_name": "",
+    "cart_actions": [],
+    "steps": [],
+}
 ```
 
-The message list lives in `ShoppingState`:
+`ShoppingState` defines which fields merge and which fields reset:
 
 ```python
 # backend/app/agent/v2/state.py
@@ -583,63 +587,77 @@ class ShoppingState(TypedDict):
     steps: list[dict]
 ```
 
-`add_messages` tells LangGraph to append/merge new messages into the existing state instead of replacing the whole list. On each request:
-
 ```
-Incoming message
-       │
-       ▼
-graph.invoke(initial_state, config={"configurable": {"thread_id": session_id}})
-       │
-       ▼
-MemorySaver restores saved state for that thread_id
-       │
-       ▼
-initial_state["messages"] contains the new HumanMessage
-       │
-       ▼
-add_messages merges new messages with prior graph messages
-       │
-       ▼
-supervisor and specialist nodes add their messages
-       │
-       ▼
-MemorySaver stores the updated graph state for the same thread_id
+POST /v2/chat/
+{ message, session_id }
+        │
+        ▼
+run_agent_v2()
+creates request-scoped cart_actions = []
+        │
+        ▼
+graph.invoke(initial_state, thread_id=session_id)
+        │
+        ▼
+MemorySaver restores saved graph state for this thread_id
+        │
+        ├─ messages      prior saved messages
+        ├─ agent_name    previous route label
+        ├─ steps         previous turn trace
+        └─ cart_actions  previous graph-state value
+        │
+        ▼
+LangGraph applies initial_state as an update
+        │
+        ├─ messages      merged via add_messages
+        │                old messages + new HumanMessage
+        │
+        ├─ agent_name    reset to ""
+        │
+        ├─ steps         reset to []
+        │
+        └─ cart_actions  reset to [] in graph state
+        │
+        ▼
+supervisor_agent runs
+        │
+        ├─ sets agent_name to product/account/cart/general
+        └─ appends supervisor routing step
+        │
+        ▼
+specialist agent runs
+        │
+        ├─ adds AI/tool messages to messages
+        ├─ returns state["steps"] + extracted tool steps
+        └─ tools may append frontend cart updates to request-scoped cart_actions
+        │
+        ▼
+MemorySaver checkpoints final graph state
+        │
+        ├─ messages      carried into next turn
+        ├─ agent_name    saved, but reset next request
+        ├─ steps         saved, but reset next request
+        └─ cart_actions  saved, but reset next request
+        │
+        ▼
+chat_v2.py returns
+{ response, steps, cart_actions, agent_name }
 ```
 
-This gives the LLM context for follow-up questions like "refund that one" or "add the cheaper one" without the router manually appending messages.
+What carries useful state across turns?
 
-`steps` also lives in `ShoppingState`, but unlike `messages`, it does not use a reducer:
+| Field | Carries useful state across turns? | Why |
+|---|---:|---|
+| `messages` | Yes | Uses `add_messages`, so each new turn is merged with prior conversation messages. |
+| `agent_name` | No | Reset to `""` on each request and recalculated by the supervisor. |
+| `steps` | No | Reset to `[]` on each request so the Thinking accordion shows only the current turn. |
+| `cart_actions` | No | Graph-state field resets; actual frontend cart actions are captured in the request-scoped list closed over by tools. |
 
-```python
-class ShoppingState(TypedDict):
-    messages: Annotated[list[BaseMessage], add_messages]
-    agent_name: str
-    cart_actions: list[dict]
-    steps: list[dict]
-```
-
-That means LangGraph does not automatically append new steps. Each node returns the full updated list itself:
-
-```python
-# backend/app/agent/v2/agents/supervisor.py
-"steps": state["steps"] + [{
-    "tool": "supervisor",
-    "input": state["messages"][-1].content,
-    "output": f"Routed to {decision.route}: {decision.reasoning}",
-}]
-```
-
-```python
-# backend/app/agent/v2/agents/product.py, cart.py, account.py
-"steps": state["steps"] + extract_steps(result["messages"])
-```
-
-In `run_agent_v2()`, every request starts with `steps: []`, so the returned steps are the trace for the current user message only. Conversation messages persist across turns through `MemorySaver` + `add_messages`; UI steps are intentionally rebuilt per request so the Thinking accordion does not show every tool call from the whole session.
+So the main state that carries conversation context across turns is `messages`. The other fields are per-request outputs used to route the graph, render the Thinking accordion, or update the frontend cart.
 
 `POST /v1/chat/` is different: `backend/app/routers/chat_v1.py` keeps `_history: dict[str, list[BaseMessage]]`, manually appends `HumanMessage` and `AIMessage`, and caps history to the last 20 messages. v1 is kept as a simpler single-agent comparison path; v2 is the main frontend flow.
 
-**Trade-off:** v2 history currently lives in process memory through `MemorySaver`, so it resets if the server restarts.
+**Trade-off:** v2 currently uses in-process `MemorySaver`, which is simple and fast for a demo, but it resets if the server restarts. A production version would use a durable LangGraph checkpointer or database-backed state store so conversation state survives process restarts and can be shared across server instances.
 
 ---
 

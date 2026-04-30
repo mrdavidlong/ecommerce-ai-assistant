@@ -6,6 +6,7 @@ from app.agent.agent import run_agent
 from app.db.session import get_db
 from app.schemas.chat import AgentStep, CartAction, ChatRequest, ChatResponse
 
+# Legacy unversioned chat route kept for compatibility; frontend uses /v2/chat/.
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 # In-memory conversation history keyed by session_id

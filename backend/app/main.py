@@ -23,6 +23,8 @@ from app.routers.users import router as users_router  # noqa: E402
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     with engine.connect() as conn:
+        # Demo-only SQLite migration shim for existing local app.db files.
+        # create_all() will not add columns to existing tables.
         cols = {c[1] for c in conn.execute(text("PRAGMA table_info(order_items)")).fetchall()}
         if "refunded" not in cols:
             conn.execute(
@@ -45,6 +47,7 @@ async def lifespan(app: FastAPI):
             from app.agent.shared.rag import embed_products
             from app.models.product import Product as ProductModel
 
+            # ChromaDB is in-memory in this demo, so rebuild the product index on startup.
             products = db.query(ProductModel).all()
             embed_products(products)
         else:

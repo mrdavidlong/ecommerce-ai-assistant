@@ -27,6 +27,7 @@ def _trunc(s: str, max_len: int = 60) -> str:
     return s[:max_len] + "..." if len(s) > max_len else s
 
 
+# Tool functions close over request-scoped db/user/cart state so the LLM only supplies business args.
 def make_tools(db: Session, user_id: str, cart_actions: list) -> list:
     uid = _UUID(user_id)
 
@@ -221,6 +222,7 @@ def make_tools(db: Session, user_id: str, cart_actions: list) -> list:
             return "Quantity must be at least 1."
         if product.stock_quantity < quantity:
             return f"Only {product.stock_quantity} {product.name}(s) in stock."
+        # Side channel for the frontend cart; this does not write an order to the DB.
         cart_actions.append(
             {
                 "action": "add",
@@ -242,6 +244,7 @@ def make_tools(db: Session, user_id: str, cart_actions: list) -> list:
         product = db.query(Product).filter(Product.name.ilike(f"%{product_name}%")).first()
         if not product:
             return f"Could not find a product matching '{product_name}'."
+        # Side channel for the frontend cart; this does not write an order to the DB.
         cart_actions.append(
             {
                 "action": "remove",

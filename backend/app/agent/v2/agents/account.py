@@ -24,6 +24,7 @@ def make_account_node(llm: ChatOpenAI, db: Session, user_id: str, cart_actions: 
         result = agent.invoke(state)  # type: ignore
         return {
             "messages": result["messages"],
+            # steps has no reducer, so preserve prior steps from this graph run explicitly.
             "steps": state["steps"] + extract_steps(result["messages"]),
         }
 

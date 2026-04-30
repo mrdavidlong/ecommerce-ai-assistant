@@ -16,6 +16,7 @@ _LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
 
 # Module-level singletons — shared across all requests
 _llm = ChatOpenAI(model=_LLM_MODEL, temperature=0)
+# In-memory LangGraph checkpointer keyed by config["configurable"]["thread_id"].
 _checkpointer = MemorySaver()
 
 
@@ -30,6 +31,7 @@ def build_graph(db: Session, user_id: str, cart_actions: list):
 
     builder.set_entry_point("supervisor_agent")
 
+    # Map supervisor route labels to graph node IDs.
     builder.add_conditional_edges(
         "supervisor_agent",
         lambda state: state["agent_name"],

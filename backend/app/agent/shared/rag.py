@@ -4,6 +4,7 @@ import os
 import chromadb
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
+# Lazy in-memory Chroma collection; process restart means the index is rebuilt.
 _collection: chromadb.Collection | None = None
 
 

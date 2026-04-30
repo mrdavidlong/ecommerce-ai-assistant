@@ -17,12 +17,17 @@ def run_agent_v2(
 
     config = {"configurable": {"thread_id": session_id}}
 
-    # Only pass the current message — MemorySaver restores prior turns via thread_id
+    # initial_state is applied as an update to the saved graph state for this thread_id.
+    # messages has the add_messages reducer, so this HumanMessage is merged with prior turns.
+    # The other fields have no reducer, so these values intentionally reset per request:
+    # - agent_name is recalculated by the supervisor
+    # - steps is rebuilt for this turn's Thinking trace
+    # - cart_actions in graph state is shape-only; tools append to the request-scoped list above
     initial_state: dict = {
         "messages": [HumanMessage(content=message)],
         "agent_name": "",
         "cart_actions": [],
-        "steps": [],
+        "steps": [],  # Reset per request so the UI shows only this turn's trace.
     }
 
     final_state = graph.invoke(initial_state, config=config)
