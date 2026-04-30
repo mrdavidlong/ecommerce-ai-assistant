@@ -2,10 +2,11 @@ import os
 from typing import Any
 
 from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from sqlalchemy.orm import Session
 
 from app.agent.shared.response import extract_last_response
+from app.agent.shared.steps import extract_steps
 from app.agent.shared.tools import make_tools
 
 SYSTEM_PROMPT = (
@@ -39,25 +40,7 @@ def run_agent_v1(
     result: dict[str, Any] = agent.invoke({"messages": all_messages})  # type: ignore[arg-type]
 
     messages: list[BaseMessage] = result.get("messages", [])
-
-    steps: list[dict] = []
-    tool_call_map: dict[str, dict] = {}
-
-    for msg in messages:
-        if isinstance(msg, AIMessage) and msg.tool_calls:
-            for tc in msg.tool_calls:
-                if tc["id"] is None:
-                    continue
-                tool_call_map[tc["id"]] = {"tool": tc["name"], "input": str(tc["args"])}
-        elif isinstance(msg, ToolMessage):
-            entry = tool_call_map.get(msg.tool_call_id, {})
-            steps.append(
-                {
-                    "tool": entry.get("tool", "unknown"),
-                    "input": entry.get("input", ""),
-                    "output": str(msg.content),
-                }
-            )
+    steps = extract_steps(messages)
 
     response = extract_last_response(messages)
     return response or "I'm sorry, I couldn't process that request.", steps, cart_actions

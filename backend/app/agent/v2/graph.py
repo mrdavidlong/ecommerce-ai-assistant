@@ -22,26 +22,26 @@ _checkpointer = MemorySaver()
 def build_graph(db: Session, user_id: str, cart_actions: list):
     builder = StateGraph(ShoppingState)
 
-    builder.add_node("supervisor", make_supervisor_node(_llm))
-    builder.add_node("product", make_product_node(_llm, db, user_id, cart_actions))
-    builder.add_node("account", make_account_node(_llm, db, user_id, cart_actions))
-    builder.add_node("cart", make_cart_node(_llm, db, user_id, cart_actions))
-    builder.add_node("general", make_general_node(_llm))
+    builder.add_node("supervisor_agent", make_supervisor_node(_llm))
+    builder.add_node("product_agent", make_product_node(_llm, db, user_id, cart_actions))
+    builder.add_node("account_agent", make_account_node(_llm, db, user_id, cart_actions))
+    builder.add_node("cart_agent", make_cart_node(_llm, db, user_id, cart_actions))
+    builder.add_node("general_agent", make_general_node(_llm))
 
-    builder.set_entry_point("supervisor")
+    builder.set_entry_point("supervisor_agent")
 
     builder.add_conditional_edges(
-        "supervisor",
+        "supervisor_agent",
         lambda state: state["agent_name"],
         {
-            "product": "product",
-            "account": "account",
-            "cart": "cart",
-            "general": "general",
+            "product": "product_agent",
+            "account": "account_agent",
+            "cart": "cart_agent",
+            "general": "general_agent",
         },
     )
 
-    for node in ("product", "account", "cart", "general"):
+    for node in ("product_agent", "account_agent", "cart_agent", "general_agent"):
         builder.add_edge(node, END)
 
     return builder.compile(checkpointer=_checkpointer)

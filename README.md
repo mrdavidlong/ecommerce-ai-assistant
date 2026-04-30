@@ -62,42 +62,128 @@ A full-stack ecommerce demo with an agentic AI shopping assistant. Users can bro
 
 ### Request lifecycle
 
-1. User types a message in `ChatWidget` → `POST /chat/` with `{user_id, message, session_id}`
-2. The chat router retrieves the conversation history for that `session_id` from an in-memory dict
-3. History + current message are passed to `run_agent`, which builds a LangChain agent with the user's tools baked in via closure
-4. LLM reasons in a loop: calls tools as needed, reads their outputs, and produces a final answer
-5. The router appends the turn to history, extracts any `cart_actions` the agent requested, and returns `{response, steps, cart_actions}`
-6. `ChatWidget` renders the response, expands the "Thinking" accordion with tool call details, and calls `CartContext.addItem` or `CartContext.removeItem` for each cart action
-7. The store page re-fetches the user's balance so it reflects any DB mutation (refund, etc.)
+1. User types a message in `ChatWidget` → `POST /v2/chat/` with `{user_id, message, session_id}`
+2. `backend/app/routers/chat_v2.py` calls `run_agent_v2(db, user_id, message, session_id)`
+3. `run_agent_v2()` builds a LangGraph state graph and invokes it with the current message
+4. LangGraph restores prior turns with `MemorySaver` using `thread_id=session_id`
+5. The supervisor agent classifies the request and returns a route label: `product`, `account`, `cart`, or `general`
+6. The selected specialist runs with only its relevant tools, calls tools as needed, and produces the final answer
+7. The router returns `{response, steps, cart_actions, agent_name}`
+8. `ChatWidget` renders the response, expands the "Thinking" accordion with routing/tool details, and applies any cart mutations
 
 ---
 
 ## AI Agent Capabilities
 
-The assistant is a **ReAct-style agent** (LLM + LangChain tool-calling). It picks the right tool(s) for each request, chains multiple calls when needed, and shows its reasoning in a collapsible "Thinking" panel.
+The default assistant is a **LangGraph multi-agent flow**. It uses a supervisor-router pattern: one supervisor classifies the user's intent, then delegates to a focused specialist agent. Each specialist is still a LangChain tool-calling agent, so once the request reaches a specialist, the model can call tools, read tool results, and continue until it has a final answer.
 
 ### How the agent decides what to do
 
-When a message arrives, `run_agent()` in `backend/app/agent/agent.py` builds a LangChain agent and invokes it with the full conversation history plus the new message:
+The main chat path starts in `backend/app/routers/chat_v2.py`:
 
 ```python
-# agent.py
-tools = make_tools(db, user_id, cart_actions)          # 8 tools, each a closure over db + user_id + cart_actions
-llm_model = os.getenv("LLM_MODEL", "gpt-4o")           # configurable via .env, defaults to gpt-4o
-agent = create_agent(llm_model, tools, system_prompt=SYSTEM_PROMPT)
-
-all_messages = history + [HumanMessage(content=message)]
-result = agent.invoke({"messages": all_messages})
+# backend/app/routers/chat_v2.py
+response_text, raw_steps, raw_cart, agent_name = run_agent_v2(
+    db, payload.user_id, payload.message, payload.session_id
+)
 ```
 
-`create_agent` tells LLM about every tool — its name, description, and parameter schema — by serialising them into the system prompt. LLM then runs a **reasoning loop**:
+`run_agent_v2()` wraps the user message in graph state and invokes LangGraph. Only the current message is passed in directly; prior conversation turns are restored by the graph checkpointer using the session ID.
+
+```python
+# backend/app/agent/v2/agent.py
+graph = build_graph(db, user_id, cart_actions)
+config = {"configurable": {"thread_id": session_id}}
+
+initial_state = {
+    "messages": [HumanMessage(content=message)],
+    "agent_name": "",
+    "cart_actions": [],
+    "steps": [],
+}
+
+final_state = graph.invoke(initial_state, config=config)
+```
+
+The graph is a simple supervisor → specialist workflow:
+
+```python
+# backend/app/agent/v2/graph.py
+builder.add_node("supervisor_agent", make_supervisor_node(_llm))
+builder.add_node("product_agent", make_product_node(_llm, db, user_id, cart_actions))
+builder.add_node("account_agent", make_account_node(_llm, db, user_id, cart_actions))
+builder.add_node("cart_agent", make_cart_node(_llm, db, user_id, cart_actions))
+builder.add_node("general_agent", make_general_node(_llm))
+
+builder.set_entry_point("supervisor_agent")
+
+builder.add_conditional_edges(
+    "supervisor_agent",
+    lambda state: state["agent_name"],
+    {
+        "product": "product_agent",
+        "account": "account_agent",
+        "cart": "cart_agent",
+        "general": "general_agent",
+    },
+)
+```
+
+The first argument to `add_conditional_edges()` is the source node: routing happens after `supervisor_agent` finishes. The lambda reads the latest graph state and returns a route label such as `"product"`. The mapping converts that route label into the destination node ID, so `"product": "product_agent"` means "when the supervisor returns the `product` route, run the `product_agent` node."
+
+The supervisor uses structured output to classify intent. It does not call product/account/cart tools itself; it sets `agent_name`, and LangGraph uses that field to choose the next agent node.
+
+```python
+# backend/app/agent/v2/agents/supervisor.py
+router_llm = llm.with_structured_output(SupervisorDecision)
+decision = router_llm.invoke([SystemMessage(content=_SYSTEM)] + state["messages"])
+
+return {
+    "agent_name": decision.route,
+    "steps": state["steps"] + [{
+        "tool": "supervisor",
+        "input": state["messages"][-1].content,
+        "output": f"Routed to {decision.route}: {decision.reasoning}",
+    }],
+}
+```
+
+`ShoppingState` is the shared state object moving through the graph:
+
+```python
+# backend/app/agent/v2/state.py
+class ShoppingState(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
+    agent_name: str
+    cart_actions: list[dict]
+    steps: list[dict]
+```
+
+- `messages` is the conversation stream. `add_messages` tells LangGraph to append new messages instead of replacing the list.
+- `agent_name` is the supervisor's route label, such as `product` or `cart`.
+- `steps` powers the frontend "Thinking" accordion.
+- `cart_actions` is part of the state shape, while the actual cart mutations are collected through the `cart_actions` list captured by the tools.
+
+Each specialist gets a filtered tool set. For example, the product agent only sees product-related tools:
+
+```python
+# backend/app/agent/v2/agents/product.py
+all_tools = make_tools(db, user_id, cart_actions)
+tool_names = {"search_products", "compare_products", "get_affordable_products"}
+tools = [t for t in all_tools if t.name in tool_names]
+
+agent = create_agent(llm, tools, system_prompt=_SYSTEM)
+result = agent.invoke(state)
+```
+
+Inside a specialist, `create_agent` tells the LLM about those tools — their names, descriptions, and schemas. The LLM then runs the usual tool-calling loop:
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  LLM    reasoning loop                          │
+│  Specialist LLM tool loop                       │
 │                                                 │
-│  1. Read: system prompt + history + user msg    │
-│  2. Decide: which tool (if any) to call next    │
+│  1. Read: specialist prompt + graph messages    │
+│  2. Decide: which tool, if any, to call next    │
 │  3. Emit: AIMessage with tool_calls = [...]     │
 │  4. LangChain executes the tool → ToolMessage   │
 │  5. LLM reads the result, goes back to 2.       │
@@ -105,29 +191,14 @@ result = agent.invoke({"messages": all_messages})
 └─────────────────────────────────────────────────┘
 ```
 
-LLM communicates its tool decisions as structured JSON inside an `AIMessage`:
-
-```json
-// What LLM emits when it wants to call a tool
-{
-  "tool_calls": [
-    {
-      "id": "call_abc123",
-      "name": "search_products",
-      "args": { "query": "video calls" }
-    }
-  ]
-}
-```
-
-LangChain sees the `tool_calls` field, dispatches to the matching Python function, and appends a `ToolMessage` with the result. LLM reads that result and either calls another tool or produces its final answer.
+`POST /v1/chat/` still exists as a simpler single-agent path in `backend/app/agent/v1/agent.py`: it builds one LangChain agent with all tools and keeps history in the v1 router's `_history` dict. v2 is the main/default flow used by the frontend.
 
 ### How intermediate steps are extracted
 
-After the loop finishes, `run_agent` walks the message list to pair each tool call with its result — this is what powers the "Thinking" accordion in the UI:
+After a specialist finishes, `extract_steps()` walks the message list to pair each tool call with its result. This is what powers the "Thinking" accordion in the UI, alongside the supervisor routing step:
 
 ```python
-# agent.py — extract steps to show in the UI
+# backend/app/agent/shared/steps.py
 tool_call_map: dict[str, dict] = {}
 
 for msg in messages:
@@ -143,13 +214,9 @@ for msg in messages:
             "input": entry.get("input", ""),
             "output": str(msg.content),
         })
-
-# Final answer = last AIMessage that has no tool_calls
-for msg in reversed(messages):
-    if isinstance(msg, AIMessage) and not msg.tool_calls:
-        response = str(msg.content)
-        break
 ```
+
+The final answer comes from `extract_last_response()` in `backend/app/agent/shared/response.py`, which returns the last `AIMessage` without tool calls.
 
 ### How tools are defined
 
@@ -434,18 +501,18 @@ You can see it in action via Chrome DevTools → **Application** tab → **Local
 | Re-render (state change) | unchanged | preserved |
 | Close/reopen chat bubble | unchanged | preserved |
 | Open new tab/window | new UUID | starts fresh |
-| **Browser refresh (F5)** | **same** (reads from localStorage) | **preserved** |
-| **Close browser, reopen** | **same** (localStorage persists) | **preserved** |
+| **Browser refresh (F5)** | **same** (reads from localStorage) | **preserved if backend process is still running** |
+| **Close browser, reopen** | **same** (localStorage persists) | **preserved if backend process is still running** |
 | **Clear browser data** | **new UUID** (localStorage wiped) | starts fresh |
-| **Server restart** | **same** (client still has old ID) | **wiped** (in-memory history lost) |
+| **Server restart** | **same** (client still has old ID) | **wiped** (`MemorySaver` is in-memory) |
 
 ### Server restart behavior (current implementation)
 
-This demo uses in-memory `_history` storage, so restarting the server clears all conversation history. However, the client still holds onto its stored `session_id`. On the next message:
+The v2 chat flow uses LangGraph's in-memory `MemorySaver` checkpointer, so restarting the server clears all saved graph state, including conversation messages. However, the client still holds onto its stored `session_id`. On the next message:
 
 1. Client sends message with old `session_id`
-2. Server's `_history` dict is empty → `setdefault()` creates a fresh list
-3. Conversation appears to restart (but the client ID is unchanged)
+2. LangGraph finds no saved state for that `thread_id`
+3. Conversation appears to restart, but the client ID is unchanged
 
 This is expected behavior for in-memory storage. The user won't notice unless they look at the Network tab.
 
@@ -467,7 +534,7 @@ window.location.reload();
 
 ### Future: persisting conversation history in production
 
-For production, to survive server restarts, replace in-memory `_history` with a database:
+For production, to survive server restarts, replace `MemorySaver` with durable storage. The cleanest option is a persistent LangGraph checkpointer backed by a database. Another option is to store serialized conversation state yourself in Redis or PostgreSQL:
 
 ```python
 # Option A: Redis (fast, session-focused)
@@ -488,36 +555,91 @@ class ChatSession(Base):
 
 With persistent storage, the conversation survives even if the server crashes and restarts.
 
-### How history is maintained
+### How v2 history is maintained
 
-The backend keeps an in-memory dict keyed by `session_id`:
+The default `/v2/chat/` flow does not keep a manual `_history` dict. Instead, `run_agent_v2()` passes the browser `session_id` to LangGraph as a thread ID:
 
 ```python
-# backend/app/routers/chat.py
-_history: dict[str, list[BaseMessage]] = {}
+# backend/app/agent/v2/agent.py
+config = {"configurable": {"thread_id": session_id}}
 ```
 
-On each request:
+The graph is compiled with `MemorySaver`, an in-memory checkpointer:
+
+```python
+# backend/app/agent/v2/graph.py
+_checkpointer = MemorySaver()
+return builder.compile(checkpointer=_checkpointer)
+```
+
+The message list lives in `ShoppingState`:
+
+```python
+# backend/app/agent/v2/state.py
+class ShoppingState(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
+    agent_name: str
+    cart_actions: list[dict]
+    steps: list[dict]
+```
+
+`add_messages` tells LangGraph to append/merge new messages into the existing state instead of replacing the whole list. On each request:
 
 ```
 Incoming message
        │
        ▼
-history = _history.setdefault(session_id, [])   # [] on first turn
+graph.invoke(initial_state, config={"configurable": {"thread_id": session_id}})
        │
        ▼
-run_agent(db, user_id, message, history)
-  └─ agent receives: history + HumanMessage(current)
+MemorySaver restores saved state for that thread_id
        │
        ▼
-history.append(HumanMessage(message))
-history.append(AIMessage(response))
-_history[session_id] = history[-20:]            # cap at 20 messages (10 turns)
+initial_state["messages"] contains the new HumanMessage
+       │
+       ▼
+add_messages merges new messages with prior graph messages
+       │
+       ▼
+supervisor and specialist nodes add their messages
+       │
+       ▼
+MemorySaver stores the updated graph state for the same thread_id
 ```
 
-The last 20 messages are kept so the LLM has context for follow-up questions ("refund that one", "add the cheaper one") without unbounded token growth.
+This gives the LLM context for follow-up questions like "refund that one" or "add the cheaper one" without the router manually appending messages.
 
-**Trade-off:** History lives in process memory — it resets if the server restarts. For production, replace the dict with a Redis store or a `ChatHistory` table in the DB.
+`steps` also lives in `ShoppingState`, but unlike `messages`, it does not use a reducer:
+
+```python
+class ShoppingState(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
+    agent_name: str
+    cart_actions: list[dict]
+    steps: list[dict]
+```
+
+That means LangGraph does not automatically append new steps. Each node returns the full updated list itself:
+
+```python
+# backend/app/agent/v2/agents/supervisor.py
+"steps": state["steps"] + [{
+    "tool": "supervisor",
+    "input": state["messages"][-1].content,
+    "output": f"Routed to {decision.route}: {decision.reasoning}",
+}]
+```
+
+```python
+# backend/app/agent/v2/agents/product.py, cart.py, account.py
+"steps": state["steps"] + extract_steps(result["messages"])
+```
+
+In `run_agent_v2()`, every request starts with `steps: []`, so the returned steps are the trace for the current user message only. Conversation messages persist across turns through `MemorySaver` + `add_messages`; UI steps are intentionally rebuilt per request so the Thinking accordion does not show every tool call from the whole session.
+
+`POST /v1/chat/` is different: `backend/app/routers/chat_v1.py` keeps `_history: dict[str, list[BaseMessage]]`, manually appends `HumanMessage` and `AIMessage`, and caps history to the last 20 messages. v1 is kept as a simpler single-agent comparison path; v2 is the main frontend flow.
+
+**Trade-off:** v2 history currently lives in process memory through `MemorySaver`, so it resets if the server restarts.
 
 ---
 
@@ -662,7 +784,7 @@ When a user sends "take the laptop out of my cart", here's the flow:
 - **Example**: a query routing to product specialist might call: supervisor (1.5k input, 50 output) + search_products (300 input, 200 output) + embeddings (50 input, 0 output). LangSmith sums all three.
 
 **Latency Measurement:**
-- Latency is measured end-to-end: from `graph.invoke()` (line 28 in agent.py) through the supervisor routing step and specialist execution, until the final response is produced
+- Latency is measured end-to-end: from `graph.invoke()` (agent.py) through the supervisor routing step and specialist execution, until the final response is produced
 - Breakdown by node:
   - **Supervisor latency**: time to classify intent + call LLM to decide routing (e.g., "this is a cart query → route to cart specialist")
   - **Specialist latency**: time for the routed agent to call tools (search_products, add_to_cart, etc.) and generate response

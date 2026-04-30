@@ -2,8 +2,8 @@ from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from sqlalchemy.orm import Session
 
+from app.agent.shared.steps import extract_steps
 from app.agent.shared.tools import make_tools
-from app.agent.v2.agents._steps import extract_steps
 from app.agent.v2.state import ShoppingState
 
 _SYSTEM = (
