@@ -702,7 +702,8 @@ uv run uvicorn app.main:app --reload
 | `EMBEDDING_MODEL` | No | `text-embedding-3-small` | Used by ChromaDB for vector embeddings |
 | `LANGSMITH_API_KEY` | No | — | Get from https://smith.langchain.com — enables tracing + eval |
 | `LANGSMITH_PROJECT` | No | — | LangSmith project name (e.g. `ecommerce-ai-assistant`) |
-| `LANGCHAIN_TRACING_V2` | No | — | Set to `true` to enable LangSmith tracing |
+| `LANGCHAIN_TRACING_V2` | No | `false` | Set to `true` to enable LangSmith tracing |
+| `LANGCHAIN_ENDPOINT` | No | `https://api.smith.langchain.com` | Standard LangSmith API endpoint |
 
 API runs at `http://localhost:8000`. On first startup, the database is seeded with 3 users and 8 products (including Apple AirTag and Tile Mate for item-tracker comparison demos), and products are embedded into ChromaDB for semantic search.
 
@@ -730,6 +731,7 @@ Add these three variables to `backend/.env`:
 LANGSMITH_API_KEY=lsv2_...          # from https://smith.langchain.com → Settings → API Keys
 LANGSMITH_PROJECT=ecommerce-ai-assistant
 LANGCHAIN_TRACING_V2=true
+LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
 ```
 
 No code changes needed — LangChain/LangGraph picks up `LANGCHAIN_TRACING_V2=true` automatically and sends every graph invocation to LangSmith.
