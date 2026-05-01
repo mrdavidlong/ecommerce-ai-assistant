@@ -30,6 +30,10 @@ const AGENT_LABELS: Record<string, string> = {
   unknown: "Assistant",
 };
 
+const DEFAULT_PANEL_SIZE = { width: 384, height: 520 };
+const MIN_PANEL_SIZE = { width: 320, height: 420 };
+const VIEWPORT_MARGIN = 24;
+
 function AgentBadge({ name }: { name: string }) {
   if (!name || name === "unknown") return null;
   return (
@@ -80,9 +84,17 @@ export default function ChatWidget() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const [panelSize, setPanelSize] = useState(DEFAULT_PANEL_SIZE);
 
   const sessionId = useRef<string>("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const resizeRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    width: number;
+    height: number;
+  } | null>(null);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -108,6 +120,39 @@ export default function ChatWidget() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, loading, scrollToBottom]);
+
+  const startResize = (event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    resizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      width: panelSize.width,
+      height: panelSize.height,
+    };
+  };
+
+  const resizePanel = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const resize = resizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+
+    const maxWidth = Math.max(MIN_PANEL_SIZE.width, window.innerWidth - VIEWPORT_MARGIN * 2);
+    const maxHeight = Math.max(MIN_PANEL_SIZE.height, window.innerHeight - 120);
+    const width = resize.width - (event.clientX - resize.startX);
+    const height = resize.height - (event.clientY - resize.startY);
+
+    setPanelSize({
+      width: Math.min(Math.max(width, MIN_PANEL_SIZE.width), maxWidth),
+      height: Math.min(Math.max(height, MIN_PANEL_SIZE.height), maxHeight),
+    });
+  };
+
+  const stopResize = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (resizeRef.current?.pointerId === event.pointerId) {
+      resizeRef.current = null;
+    }
+  };
 
   const send = async () => {
     if (!userId) return;
@@ -175,10 +220,25 @@ export default function ChatWidget() {
   return (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end">
       {open && (
-        <div className="mb-3 w-96 h-[520px] bg-white rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden">
+        <div
+          className="relative mb-3 bg-white rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
+          style={{ width: panelSize.width, height: panelSize.height }}
+        >
+          <button
+            type="button"
+            aria-label="Resize chat window"
+            title="Resize chat window"
+            onPointerDown={startResize}
+            onPointerMove={resizePanel}
+            onPointerUp={stopResize}
+            onPointerCancel={stopResize}
+            className="absolute left-1 top-1 z-10 h-6 w-6 cursor-nwse-resize rounded-md text-blue-100 hover:text-white hover:bg-blue-500/40 flex items-center justify-center text-sm"
+          >
+            ↖
+          </button>
           {/* Header */}
           <div className="bg-blue-600 text-white px-4 py-3 flex justify-between items-center">
-            <div>
+            <div className="pl-5">
               <p className="font-semibold">AI Shopping Assistant</p>
               <p className="text-xs text-blue-200">Powered by LLM · Multi-Agent + RAG</p>
             </div>

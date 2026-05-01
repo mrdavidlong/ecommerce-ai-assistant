@@ -2,7 +2,7 @@ from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from sqlalchemy.orm import Session
 
-from app.agent.shared.steps import extract_steps
+from app.agent.shared.steps import extract_latest_turn_steps
 from app.agent.shared.tools import make_tools
 from app.agent.v2.state import ShoppingState
 
@@ -24,8 +24,8 @@ def make_account_node(llm: ChatOpenAI, db: Session, user_id: str, cart_actions: 
         result = agent.invoke(state)  # type: ignore
         return {
             "messages": result["messages"],
-            # steps has no reducer, so preserve prior steps from this graph run explicitly.
-            "steps": state["steps"] + extract_steps(result["messages"]),
+            # Extract only this turn; result["messages"] also includes MemorySaver history.
+            "steps": state["steps"] + extract_latest_turn_steps(result["messages"]),
         }
 
     return account_node

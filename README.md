@@ -452,110 +452,24 @@ Finds the product, checks stock, and updates the cart sidebar in real time — n
 | "I don't want the keyboard anymore" | `remove_from_cart("Keyboard")` | Keyboard cleared from cart immediately |
 
 #### 5. Refund Processing
-Multi-step: looks up order history, checks eligibility (30-day window, not already refunded), then executes the refund atomically — restoring balance and stock.
+Multi-step: looks up order history, identifies the specific item, checks eligibility (30-day window, quantity remaining), then executes the item refund atomically — restoring balance and stock.
 
 | You say | Agent does | You see |
 |---|---|---|
-| "I want a refund on order 536f7bce" | `process_refund("536f7bce")` | Balance restored, order marked Refunded in Order History |
-| "Refund my most recent order" | `get_order_history()` → `process_refund("<id>")` | Agent finds the ID itself, then refunds |
+| "Refund the webcam from my recent order" | `process_item_refund([Order ID]], "Webcam")` | Webcam refunded, balance and stock restored |
+| "Refund one keyboard from my latest order" | `get_order_history()` → `process_item_refund("<id>", "Keyboard", 1)` | Agent finds the latest order, then refunds one keyboard |
+| "I bought two webcams but only want to return one" | `get_order_history()` → `process_item_refund("<id>", "Webcam", 1)` | One unit refunded; the remaining unit stays on the order |
 
-Multi-step walkthrough — "Refund my most recent order":
-1. Agent calls `get_order_history()` to retrieve the latest order ID
-2. Reads the refund eligibility status from the tool output
-3. Calls `process_refund("<id>")` to execute the refund
-4. Reports the refunded amount and new balance
+Multi-step walkthrough — "Refund one keyboard from my latest order":
+1. Agent calls `get_order_history()` to retrieve recent order IDs and item names
+2. Picks the latest order containing a keyboard with refundable quantity remaining
+3. Calls `process_item_refund("<id>", "Keyboard", 1)` to execute the item refund
+4. Reports the refunded amount, updated balance, and item refund status
+
 
 ---
 
-## Session ID & Conversation History
-
-### How the session ID is created and persisted
-
-`ChatWidget` generates a session ID using the browser's built-in `crypto.randomUUID()` — no library required. It produces a version 4 UUID like `f47ac10b-58cc-4372-a567-0e02b2c3d479`. On first visit, it saves the ID to browser storage for persistence across page reloads:
-
-```ts
-// frontend/src/components/ChatWidget.tsx
-const sessionId = useRef(
-  localStorage.getItem("chat_session_id") ?? (() => {
-    const id = crypto.randomUUID();
-    localStorage.setItem("chat_session_id", id);
-    return id;
-  })()
-);
-```
-
-### Where it's stored on the client
-
-The ID is stored in **`localStorage`** (browser's persistent key-value store under the key `"chat_session_id"`). It persists across:
-- Page refreshes (F5, Cmd+R)
-- Closing and reopening the browser
-- Navigating away and back
-- Closing the chat bubble and reopening it
-
-You can see it in action via Chrome DevTools → **Application** tab → **Local Storage** → find `chat_session_id`. You'll also see it in the Network tab's request payload.
-
-### What happens on browser refresh and server restart
-
-| Event | session_id | Conversation history |
-|---|---|---|
-| Re-render (state change) | unchanged | preserved |
-| Close/reopen chat bubble | unchanged | preserved |
-| Open new tab/window | new UUID | starts fresh |
-| **Browser refresh (F5)** | **same** (reads from localStorage) | **preserved if backend process is still running** |
-| **Close browser, reopen** | **same** (localStorage persists) | **preserved if backend process is still running** |
-| **Clear browser data** | **new UUID** (localStorage wiped) | starts fresh |
-| **Server restart** | **same** (client still has old ID) | **wiped** (`MemorySaver` is in-memory) |
-
-### Server restart behavior (current implementation)
-
-The v2 chat flow uses LangGraph's in-memory `MemorySaver` checkpointer, so restarting the server clears all saved graph state, including conversation messages. However, the client still holds onto its stored `session_id`. On the next message:
-
-1. Client sends message with old `session_id`
-2. LangGraph finds no saved state for that `thread_id`
-3. Conversation appears to restart, but the client ID is unchanged
-
-This is expected behavior for in-memory storage. The user won't notice unless they look at the Network tab.
-
-### How to clear the session ID
-
-To start a completely fresh conversation (new `session_id`), clear the browser's localStorage:
-
-**Via Chrome DevTools:**
-- **Application** tab → **Local Storage** → right-click → **Clear** → reload page
-
-**Via browser settings:**
-- Settings → Privacy → Clear browsing data → select "Cookies and other site data" → Clear
-
-**Programmatically (for developers):**
-```ts
-localStorage.removeItem("chat_session_id");
-window.location.reload();
-```
-
-### Future: persisting conversation history in production
-
-For production, to survive server restarts, replace `MemorySaver` with durable storage. The cleanest option is a persistent LangGraph checkpointer backed by a database. Another option is to store serialized conversation state yourself in Redis or PostgreSQL:
-
-```python
-# Option A: Redis (fast, session-focused)
-import redis
-r = redis.Redis()
-history_json = r.get(f"chat_session:{session_id}")
-r.set(f"chat_session:{session_id}", json.dumps(messages), ex=86400)  # 24h TTL
-
-# Option B: PostgreSQL (permanent, queryable)
-class ChatSession(Base):
-    __tablename__ = "chat_sessions"
-    session_id: Mapped[str] = mapped_column(primary_key=True)
-    messages: Mapped[str] = mapped_column(Text)  # JSON list
-    created_at: Mapped[datetime]
-    
-    # Retrieve: session = db.query(ChatSession).filter_by(session_id=sid).first()
-```
-
-With persistent storage, the conversation survives even if the server crashes and restarts.
-
-### How v2 graph state is maintained
+## How v2 graph state is maintained
 
 The default `/v2/chat/` flow uses LangGraph state plus `MemorySaver`, keyed by the browser `session_id`. It does not keep a manual `_history` dict:
 
@@ -676,6 +590,96 @@ So the main state that carries conversation context across turns is `messages`. 
 | POST | `/v2/chat/` | Send a message to the multi-agent (LangGraph, default) |
 
 Interactive docs available at `http://localhost:8000/docs`.
+
+---
+
+## Session ID & Conversation History
+
+### How the session ID is created and persisted
+
+`ChatWidget` generates a session ID using the browser's built-in `crypto.randomUUID()` — no library required. It produces a version 4 UUID like `f47ac10b-58cc-4372-a567-0e02b2c3d479`. On first visit, it saves the ID to browser storage for persistence across page reloads:
+
+```ts
+// frontend/src/components/ChatWidget.tsx
+const sessionId = useRef(
+  localStorage.getItem("chat_session_id") ?? (() => {
+    const id = crypto.randomUUID();
+    localStorage.setItem("chat_session_id", id);
+    return id;
+  })()
+);
+```
+
+### Where it's stored on the client
+
+The ID is stored in **`localStorage`** (browser's persistent key-value store under the key `"chat_session_id"`). It persists across:
+- Page refreshes (F5, Cmd+R)
+- Closing and reopening the browser
+- Navigating away and back
+- Closing the chat bubble and reopening it
+
+You can see it in action via Chrome DevTools → **Application** tab → **Local Storage** → find `chat_session_id`. You'll also see it in the Network tab's request payload.
+
+### What happens on browser refresh and server restart
+
+| Event | session_id | Conversation history |
+|---|---|---|
+| Re-render (state change) | unchanged | preserved |
+| Close/reopen chat bubble | unchanged | preserved |
+| Open new tab/window | new UUID | starts fresh |
+| **Browser refresh (F5)** | **same** (reads from localStorage) | **preserved if backend process is still running** |
+| **Close browser, reopen** | **same** (localStorage persists) | **preserved if backend process is still running** |
+| **Clear browser data** | **new UUID** (localStorage wiped) | starts fresh |
+| **Server restart** | **same** (client still has old ID) | **wiped** (`MemorySaver` is in-memory) |
+
+### Server restart behavior (current implementation)
+
+The v2 chat flow uses LangGraph's in-memory `MemorySaver` checkpointer, so restarting the server clears all saved graph state, including conversation messages. However, the client still holds onto its stored `session_id`. On the next message:
+
+1. Client sends message with old `session_id`
+2. LangGraph finds no saved state for that `thread_id`
+3. Conversation appears to restart, but the client ID is unchanged
+
+This is expected behavior for in-memory storage. The user won't notice unless they look at the Network tab.
+
+### How to clear the session ID
+
+To start a completely fresh conversation (new `session_id`), clear the browser's localStorage:
+
+**Via Chrome DevTools:**
+- **Application** tab → **Local Storage** → right-click → **Clear** → reload page
+
+**Via browser settings:**
+- Settings → Privacy → Clear browsing data → select "Cookies and other site data" → Clear
+
+**Programmatically (for developers):**
+```ts
+localStorage.removeItem("chat_session_id");
+window.location.reload();
+```
+
+### Future: persisting conversation history in production
+
+For production, to survive server restarts, replace `MemorySaver` with durable storage. The cleanest option is a persistent LangGraph checkpointer backed by a database. Another option is to store serialized conversation state yourself in Redis or PostgreSQL:
+
+```python
+# Option A: Redis (fast, session-focused)
+import redis
+r = redis.Redis()
+history_json = r.get(f"chat_session:{session_id}")
+r.set(f"chat_session:{session_id}", json.dumps(messages), ex=86400)  # 24h TTL
+
+# Option B: PostgreSQL (permanent, queryable)
+class ChatSession(Base):
+    __tablename__ = "chat_sessions"
+    session_id: Mapped[str] = mapped_column(primary_key=True)
+    messages: Mapped[str] = mapped_column(Text)  # JSON list
+    created_at: Mapped[datetime]
+    
+    # Retrieve: session = db.query(ChatSession).filter_by(session_id=sid).first()
+```
+
+With persistent storage, the conversation survives even if the server crashes and restarts.
 
 ---
 

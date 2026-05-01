@@ -22,5 +22,8 @@ class ShoppingState(TypedDict):
 
 
 class SupervisorDecision(BaseModel):
+    # Structured LLM output from supervisor_agent.
+    # route must match one of the route labels handled by graph.py.
     route: Literal["product", "account", "cart", "general"]
+    # Short explanation captured for the UI-visible supervisor step.
     reasoning: str

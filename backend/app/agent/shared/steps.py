@@ -1,4 +1,4 @@
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 
 def extract_steps(messages: list) -> list[dict]:
@@ -21,3 +21,12 @@ def extract_steps(messages: list) -> list[dict]:
                 }
             )
     return steps
+
+
+def extract_latest_turn_steps(messages: list) -> list[dict]:
+    """Extract tool steps that occurred after the latest user message only."""
+    latest_human_idx = -1
+    for idx, msg in enumerate(messages):
+        if isinstance(msg, HumanMessage):
+            latest_human_idx = idx
+    return extract_steps(messages[latest_human_idx + 1 :])
