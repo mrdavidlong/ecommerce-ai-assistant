@@ -81,17 +81,20 @@ export default function ChatWidget() {
   const [loading, setLoading] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
 
-  const sessionId = useRef(
-    localStorage.getItem("chat_session_id") ??
-      (() => {
-        const id = crypto.randomUUID();
-        localStorage.setItem("chat_session_id", id);
-        return id;
-      })(),
-  );
+  const sessionId = useRef<string>("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("chat_session_id");
+      if (stored) {
+        sessionId.current = stored;
+      } else {
+        const id = crypto.randomUUID();
+        localStorage.setItem("chat_session_id", id);
+        sessionId.current = id;
+      }
+    }
     const user = getCurrentUser();
     setUserId(user?.id ?? null);
   }, []);
