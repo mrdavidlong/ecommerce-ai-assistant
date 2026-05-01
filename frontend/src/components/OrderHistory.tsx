@@ -55,7 +55,7 @@ function OrderRow({ order }: { order: Order }) {
                 <th className="pb-2 text-right">Qty</th>
                 <th className="pb-2 text-right">Unit price</th>
                 <th className="pb-2 text-right">Line total</th>
-                <th className="pb-2">Status</th>
+                <th className="pb-2 pl-4">Status</th>
               </tr>
             </thead>
             <tbody>
@@ -85,7 +85,7 @@ function OrderRow({ order }: { order: Order }) {
                     <td className="py-2 text-right font-medium text-gray-900">
                       {formatCurrency(item.price * item.quantity)}
                     </td>
-                    <td className="py-2">{statusBadge}</td>
+                    <td className="py-2 pl-4">{statusBadge}</td>
                   </tr>
                 );
               })}

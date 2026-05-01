@@ -1,10 +1,62 @@
 # E-commerce AI Assistant
 
-A full-stack ecommerce demo with an agentic AI shopping assistant. Users can browse products, place orders, and chat with an AI that can search products, compare items, check balances, add items to the shopping cart, remove items from the shoppint cart, and process refunds — showing its reasoning step by step.
+A full-stack ecommerce demo with an agentic AI shopping assistant. Users can browse products, place orders, and chat with an AI that can search products, compare items, check balances, add items to the shopping cart, remove items from the shopping cart, and process refunds — showing its reasoning step by step.
 
 ![AI Assistant on the store page](./images/ai-shopping-assistant-store-page.png)
 ![AI Assistant on the order history page](./images/ai-shopping-assistant-order-history-page.png)
 
+
+## AI Techniques Demonstrated
+
+This project is primarily a case study in applied AI engineering, not ecommerce itself. The shopping flow gives the agent realistic tools, state, and business rules to work against; the main learning focus is how to design, observe, and evaluate an AI assistant that can reliably act inside an application.
+
+| Technique | Where it shows up |
+|---|---|
+| Multi-agent routing | Explained in [AI Agent Capabilities](#ai-agent-capabilities); implemented in `backend/app/agent/v2/graph.py` |
+| Tool calling | Specialists use scoped tools from `backend/app/agent/shared/tools.py` |
+| RAG / semantic search | Explained in [How RAG works](#how-rag-works); implemented in `backend/app/agent/shared/rag.py` |
+| Structured outputs | Supervisor route decision in `backend/app/agent/v2/agents/supervisor.py` |
+| Stateful conversations | Explained in [How v2 graph state is maintained](#how-v2-graph-state-is-maintained); state shape in `backend/app/agent/v2/state.py` |
+| Observable AI behavior | UI step rendering in `frontend/src/components/ChatWidget.tsx`; extraction in `backend/app/agent/shared/steps.py` |
+| Evaluation | LangSmith evals in `backend/evals/`; results shown in [LangSmith Integration](#langsmith-integration) |
+
+Non-AI application details like demo authentication, project structure, and model boilerplate live in the appendix so the main README stays focused on the AI learnings.
+
+## How To Review This Project
+
+1. Start with the screenshots above to see the AI agent's interaction with the user's input.
+2. Read [Architecture & Data Flow](#architecture--data-flow) for the system shape.
+3. Read [AI Agent Capabilities](#ai-agent-capabilities) for the LangGraph supervisor and specialist-agent implementation.
+4. Read [How RAG works](#how-rag-works) for the semantic product search design.
+5. Read [LangSmith Integration](#langsmith-integration) for tracing, evaluation, and v1 vs v2 comparison.
+6. Skim [Appendix: App Plumbing](#appendix-app-plumbing) only if you want setup, auth, tests, or ordinary app details.
+
+## Exmaple Of A Use Case Walkthrough
+
+The app is designed to show several AI patterns in a short walkthrough:
+
+| Step | Prompt / action | AI technique shown |
+|---|---|---|
+| 1 | Ask: "What's good for video calls?" | RAG retrieves products by use-case, not exact keyword |
+| 2 | Expand "Thinking" | The UI exposes supervisor routing and tool calls |
+| 3 | Ask: "Add 2 webcams to my cart" | Tool calling mutates frontend cart state through structured `cart_actions` |
+| 4 | Ask: "Compare AirTag and Tile Mate" | Product specialist combines search/comparison tools |
+| 5 | Place an order, then ask for a refund | Multi-step account tool flow validates and applies business rules |
+| 6 | Open LangSmith eval results | Traces, routing accuracy, tool accuracy, latency, and cost comparison |
+
+## Key AI Engineering Learnings
+
+The goal of this project was to learn how AI agents behave when connected to real application state instead of isolated chat prompts.
+
+| Learning | How this project demonstrates it |
+|---|---|
+| Agents need narrower tool scopes | v2 (multi-agents) routes to specialists so each agent sees only the tools relevant to the user's intent |
+| Routing is a design tradeoff | The supervisor adds one LLM call, but it improves tool selection and reduces wasted exploration, and thus reduce token cost, but increased latency |
+| RAG is strongest when paired with live data | ChromaDB retrieves static product matches with semantic search (similar meaning rather than exact word match), then tools read current stock and user data from SQLite |
+| Tool descriptions shape agent behavior | The model chooses tools based on names, schemas, and descriptions, so tool contracts need to be written carefully |
+| State should be explicit | LangGraph state separates long-lived messages from per-request outputs like `steps` and `cart_actions` |
+| Observability changes how you debug | LangSmith traces make routing decisions, tool calls, latency, and token usage inspectable |
+| Evals make agent changes comparable | v1 (single-agent) and v2 (multi-agents) can be compared on routing accuracy, tool accuracy, latency, and cost instead of ad hoc impressions |
 
 ## Stack
 
@@ -573,26 +625,6 @@ So the main state that carries conversation context across turns is `messages`. 
 
 **Trade-off:** v2 currently uses in-process `MemorySaver`, which is simple and fast for a demo, but it resets if the server restarts. A production version would use a durable LangGraph checkpointer or database-backed state store so conversation state survives process restarts and can be shared across server instances.
 
----
-
-## API Endpoints
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/users/` | List all users |
-| GET | `/users/{id}` | Get user by UUID |
-| GET | `/products/` | List all products |
-| GET | `/products/{id}` | Get product by UUID |
-| POST | `/orders/` | Place an order |
-| GET | `/orders/?user_id={id}` | List orders for a user |
-| POST | `/orders/{id}/refund?user_id={uid}` | Refund an order |
-| POST | `/v1/chat/` | Send a message to the single-agent (LangChain ReAct) |
-| POST | `/v2/chat/` | Send a message to the multi-agent (LangGraph, default) |
-
-Interactive docs available at `http://localhost:8000/docs`.
-
----
-
 ## Session ID & Conversation History
 
 ### How the session ID is created and persisted
@@ -725,7 +757,7 @@ This project uses [LangSmith](https://smith.langchain.com) for two things: **aut
 
 ### Setup
 
-Add these three variables to `backend/.env`:
+Add these variables to `backend/.env`:
 
 ```env
 LANGSMITH_API_KEY=lsv2_...          # from https://smith.langchain.com → Settings → API Keys
@@ -842,7 +874,47 @@ This is **expected behavior**: v2 trades a bit of latency (one extra supervisor 
 
 ---
 
-## User Flow
+## Production Tradeoffs
+
+This is intentionally a focused demo, but the implementation calls out where a production AI assistant would need different choices:
+
+| Area | Current demo choice | Production direction |
+|---|---|---|
+| Conversation memory | LangGraph `MemorySaver` in process | Durable checkpointer backed by Postgres, Redis, or another shared store |
+| Vector storage | In-memory ChromaDB rebuilt on startup | Persistent vector database with indexing and refresh jobs |
+| Auth | Demo user selected from seeded accounts | Secure sessions, OAuth, or JWT/cookie-based auth |
+| Cart state | Client-side cart updated by AI `cart_actions` | Server-backed cart with idempotency and inventory reservation |
+| Refunds/orders | SQLite transaction in a demo database | Stronger audit trails, permissions, payment integration, and reconciliation |
+| Evals | 21 representative queries | Larger regression set with edge cases, adversarial prompts, and scenario-level success metrics |
+| Latency | Sequential supervisor then specialist call | Model selection, caching, streaming, or parallel retrieval where appropriate |
+
+The important AI lesson is that agent architecture is not only about getting a good answer once. It also needs observability, repeatable evaluation, clear state boundaries, and production-aware failure modes.
+
+---
+
+## Appendix: App Plumbing
+
+These sections document the supporting application pieces around the AI assistant. They are useful for running or extending the demo, but they are not the main learning focus of the project.
+
+### API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/users/` | List all users |
+| GET | `/users/{id}` | Get user by UUID |
+| GET | `/products/` | List all products |
+| GET | `/products/{id}` | Get product by UUID |
+| POST | `/orders/` | Place an order |
+| GET | `/orders/?user_id={id}` | List orders for a user |
+| POST | `/orders/{id}/refund?user_id={uid}` | Refund an order |
+| POST | `/v1/chat/` | Send a message to the single-agent (LangChain ReAct) |
+| POST | `/v2/chat/` | Send a message to the multi-agent (LangGraph, default) |
+
+Interactive docs are available at `http://localhost:8000/docs`.
+
+---
+
+### User Flow
 
 1. Select your account on the login page
 2. Browse products and add them to your cart
@@ -852,9 +924,9 @@ This is **expected behavior**: v2 trades a bit of latency (one extra supervisor 
 
 ---
 
-## User Authentication
+### User Authentication
 
-### How user login works
+#### How user login works
 
 The app uses a simple, demo-style login with no password:
 
@@ -863,7 +935,7 @@ The app uses a simple, demo-style login with no password:
 3. Page redirects to `/store` using `router.replace("/")` (not `push`, so the back button doesn't re-enter login)
 4. **Protected pages** check `getCurrentUser()` on mount → if null, redirect back to `/`
 
-### How it survives browser refresh
+#### How it survives browser refresh
 
 User login is stored in **`localStorage`** under the key `"current_user"`:
 
@@ -893,7 +965,7 @@ This means:
 - **Open new tab**: User stays logged in ✓ (shared localStorage)
 - **Clear browser data**: User logged out (localStorage wiped)
 
-### How to log out
+#### How to log out
 
 Call `clearCurrentUser()` to remove the localStorage entry:
 
@@ -906,7 +978,7 @@ function handleLogout() {
 
 Or manually clear via Chrome DevTools → **Application** → **Local Storage** → delete `current_user` key.
 
-### Implementation details
+#### Implementation details
 
 **Frontend (no auth library):**
 - User login is plain React `useState` + `localStorage`
@@ -919,7 +991,7 @@ Or manually clear via Chrome DevTools → **Application** → **Local Storage** 
 - No session validation or tokens
 - Not production-safe (intended for demo only)
 
-### Key differences from persistent auth
+#### Key differences from persistent auth
 
 This project intentionally uses a **localStorage-based approach**:
 - Simple and straightforward for a demo
@@ -931,9 +1003,9 @@ For production, use JWT tokens, session cookies, or OAuth with a secure backend 
 
 ---
 
-## Running Tests & Checks
+### Running Tests & Checks
 
-### All checks at once (recommended)
+#### All checks at once (recommended)
 
 ```bash
 # From project root, run both linting and tests
@@ -954,7 +1026,7 @@ The `run-checks.sh` script:
 - Provides clear feedback with emoji status indicators
 - Exits on first failure to catch issues early
 
-### Backend tests
+#### Backend tests
 
 ```bash
 cd backend
@@ -974,9 +1046,9 @@ uv run pytest tests/ --cov=app --cov-report=html
 
 30 tests covering users, products, orders (including refunds), and chat routing. Tests use a separate SQLite database (`test.db`) and mock external dependencies.
 
-## Linting & Formatting
+### Linting & Formatting
 
-### Backend (Python)
+#### Backend (Python)
 
 ```bash
 cd backend
@@ -996,7 +1068,7 @@ uv run ruff check . --fix && uv run ruff format .
 
 [Ruff](https://docs.astral.sh/ruff/) is a fast Python linter and formatter. It checks style, imports, and common errors.
 
-### Frontend (TypeScript + JavaScript)
+#### Frontend (TypeScript + JavaScript)
 
 ```bash
 cd frontend
@@ -1017,7 +1089,7 @@ npm run lint -- --fix
 
 ---
 
-## Project Structure
+### Project Structure
 
 ```
 ecommerce-ai-assistant/
@@ -1046,7 +1118,7 @@ ecommerce-ai-assistant/
 
 ---
 
-## Troubleshooting
+### Troubleshooting
 
 **Port 8000 already in use**
 ```bash
@@ -1062,7 +1134,7 @@ lsof -ti :8000 | xargs kill
 
 ---
 
-## Adding New Models
+### Adding New Models
 
 All models inherit from `Base` in `app/db/base.py`:
 

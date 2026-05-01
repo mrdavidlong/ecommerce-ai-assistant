@@ -49,6 +49,9 @@ frontend/next-env.d.ts
 .DS_Store
 Thumbs.db
 
+# Generated demo capture intermediates
+images/recordings/
+
 # Claude Code
 .claude/
 
