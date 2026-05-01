@@ -781,6 +781,8 @@ Once the env vars are set, every chat request to `/v2/chat/` is traced automatic
    - Every tool call with inputs and outputs
    - Token usage and latency per node
 
+![LangSmith v2 tracing](./images/ai-shopping-assistant-langsmith-tracing.png)
+
 ### Evaluation
 
 The eval suite runs 21 test queries through v1 and v2 and measures:
