@@ -27,7 +27,7 @@ def _trunc(s: str, max_len: int = 60) -> str:
     return s[:max_len] + "..." if len(s) > max_len else s
 
 
-# Tool functions close over request-scoped db/user/cart state so the LLM only supplies business args.
+# Tool functions close over request-scoped db/user/cart state; LLM supplies only business args.
 def make_tools(db: Session, user_id: str, cart_actions: list) -> list:
     uid = _UUID(user_id)
 

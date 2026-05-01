@@ -17,7 +17,16 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Agent error: {e}")
 
-    steps = [AgentStep(tool=s["tool"], input=s["input"], output=s["output"]) for s in raw_steps]
+    steps = [
+        AgentStep(
+            tool=s["tool"],
+            input=s["input"],
+            output=s["output"],
+            # Older/legacy steps may not include an agent tag.
+            agent=s.get("agent", "unknown"),
+        )
+        for s in raw_steps
+    ]
     cart_actions = [
         CartAction(
             action=a["action"],

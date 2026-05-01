@@ -31,7 +31,7 @@ def apply_item_refund(
     if refund_qty is None:
         refund_qty = item.quantity - item.refunded_quantity
     refund_amount = item.price * refund_qty
-    # Track partial item refunds; mark the item/order fully refunded only when all units are refunded.
+    # Mark item/order fully refunded only when all units are refunded.
     item.refunded_quantity += refund_qty
     if item.refunded_quantity >= item.quantity:
         item.refunded = True

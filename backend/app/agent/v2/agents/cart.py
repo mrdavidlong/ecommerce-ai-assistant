@@ -23,10 +23,14 @@ def make_cart_node(llm: ChatOpenAI, db: Session, user_id: str, cart_actions: lis
 
     def cart_node(state: ShoppingState) -> dict:
         result = agent.invoke(state)  # type: ignore
+        tool_steps = extract_latest_turn_steps(result["messages"])
+        # Tag each tool step so the Thinking UI can show which specialist acted.
+        for step in tool_steps:
+            step["agent"] = "cart"
         return {
             "messages": result["messages"],
             # Extract only this turn; result["messages"] also includes MemorySaver history.
-            "steps": state["steps"] + extract_latest_turn_steps(result["messages"]),
+            "steps": state["steps"] + tool_steps,
         }
 
     return cart_node

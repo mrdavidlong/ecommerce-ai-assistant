@@ -29,6 +29,7 @@ def make_supervisor_node(llm: ChatOpenAI):
             "steps": state["steps"]
             + [
                 {
+                    "agent": "supervisor",
                     "tool": "supervisor",
                     "input": state["messages"][-1].content,
                     "output": f"Routed to {decision.route}: {decision.reasoning}",

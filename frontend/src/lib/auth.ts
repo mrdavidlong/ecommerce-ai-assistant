@@ -1,4 +1,6 @@
 const STORAGE_KEY = "current_user";
+const CHAT_SESSION_KEY = "chat_session_id";
+export const AUTH_CHANGED_EVENT = "auth-changed";
 
 export interface CurrentUser {
   id: string;
@@ -18,8 +20,11 @@ export function getCurrentUser(): CurrentUser | null {
 
 export function setCurrentUser(user: CurrentUser): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
+  window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT));
 }
 
 export function clearCurrentUser(): void {
   localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(CHAT_SESSION_KEY);
+  window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT));
 }

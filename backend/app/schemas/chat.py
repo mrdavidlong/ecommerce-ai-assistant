@@ -10,6 +10,8 @@ class ChatRequest(BaseModel):
 
 
 class AgentStep(BaseModel):
+    # Agent that produced this UI-visible step, e.g. supervisor/product/account/cart.
+    agent: str = "unknown"
     tool: str
     input: str
     output: str

@@ -2,12 +2,13 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useCart } from "~/contexts/CartContext";
-import { getCurrentUser } from "~/lib/auth";
+import { AUTH_CHANGED_EVENT, getCurrentUser } from "~/lib/auth";
 
 interface AgentStep {
   tool: string;
   input: string;
   output: string;
+  agent?: string;
 }
 
 interface CartAction {
@@ -23,6 +24,7 @@ type Message =
   | { role: "assistant"; text: string; steps: AgentStep[]; agentName: string };
 
 const AGENT_LABELS: Record<string, string> = {
+  supervisor: "Supervisor",
   product: "Product Specialist",
   account: "Account Specialist",
   cart: "Cart Specialist",
@@ -65,6 +67,12 @@ function StepsAccordion({ steps }: { steps: AgentStep[] }) {
         <div className="mt-1 space-y-1 pl-3 border-l-2 border-purple-200">
           {steps.map((step, i) => (
             <div key={i} className="text-xs text-gray-600 bg-purple-50 rounded p-2">
+              {/* Backend tags each step with the agent that produced it. */}
+              {step.agent && step.agent !== "unknown" && (
+                <p className="mb-1 font-semibold text-purple-500">
+                  {AGENT_LABELS[step.agent] ?? step.agent}
+                </p>
+              )}
               <p className="font-mono font-semibold text-purple-700">
                 → {step.tool}({step.input})
               </p>
@@ -97,7 +105,17 @@ export default function ChatWidget() {
   } | null>(null);
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
+    const syncUser = () => {
+      const user = getCurrentUser();
+      setUserId(user?.id ?? null);
+      if (!user) {
+        setOpen(false);
+        setMessages([]);
+        setInput("");
+        sessionId.current = "";
+        return;
+      }
+
       const stored = localStorage.getItem("chat_session_id");
       if (stored) {
         sessionId.current = stored;
@@ -106,9 +124,11 @@ export default function ChatWidget() {
         localStorage.setItem("chat_session_id", id);
         sessionId.current = id;
       }
-    }
-    const user = getCurrentUser();
-    setUserId(user?.id ?? null);
+    };
+
+    syncUser();
+    window.addEventListener(AUTH_CHANGED_EVENT, syncUser);
+    return () => window.removeEventListener(AUTH_CHANGED_EVENT, syncUser);
   }, []);
 
   const scrollToBottom = useCallback(() => {
