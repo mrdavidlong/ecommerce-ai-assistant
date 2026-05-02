@@ -31,7 +31,7 @@ Non-AI application details like demo authentication, project structure, and mode
 5. Read [LangSmith Integration](#langsmith-integration) for tracing, evaluation, and v1 vs v2 comparison.
 6. Skim [Appendix: App Plumbing](#appendix-app-plumbing) only if you want setup, auth, tests, or ordinary app details.
 
-## Exmaple Of A Use Case Walkthrough
+## Example Of A Use Case Walkthrough
 
 The app is designed to show several AI patterns in a short walkthrough:
 
@@ -876,6 +876,22 @@ This is **expected behavior**: v2 trades a bit of latency (one extra supervisor 
 
 ---
 
+## Reliability & Error Handling
+
+Because this assistant can take actions, the project treats error handling as part of the agent design rather than only backend plumbing.
+
+| Layer | Error handling demonstrated |
+|---|---|
+| API validation | Orders and refunds return explicit `400`, `403`, and `404` errors for invalid quantities, missing users/products/orders, insufficient balance, insufficient stock, wrong-user refunds, and duplicate refunds |
+| Transaction safety | Order creation and refunds update balance, stock, order records, and order items together; failures call `db.rollback()` before returning a `500` |
+| Tool execution safeguards | AI tools enforce business rules for ambiguous order IDs, missing order items, over-refund attempts, expired refund windows, invalid quantities, and missing products |
+| Frontend fallback states | Store, order history, cart checkout, and chat all show user-facing fallback messages when API requests fail |
+| Test coverage | Negative-path tests cover insufficient balance/stock, missing records, wrong-user refunds, duplicate refunds, and chat agent failures |
+
+This matters for AI engineering because tool-calling agents need clear failure boundaries around side effects. The model can propose actions, but the application code still owns validation, transactions, and recovery.
+
+---
+
 ## Production Tradeoffs
 
 This is intentionally a focused demo, but the implementation calls out where a production AI assistant would need different choices:
@@ -889,6 +905,8 @@ This is intentionally a focused demo, but the implementation calls out where a p
 | Refunds/orders | SQLite transaction in a demo database | Stronger audit trails, permissions, payment integration, and reconciliation |
 | Evals | 21 representative queries | Larger regression set with edge cases, adversarial prompts, and scenario-level success metrics |
 | Latency | Sequential supervisor then specialist call | Model selection, caching, streaming, or parallel retrieval where appropriate |
+| Prompt-injection defenses | Basic role prompts and scoped specialist tools only | Instruction-conflict handling, stricter tool-call policies, audit logs, and adversarial eval cases |
+| External tool integration | App-local LangChain tools | MCP server exposing product, order, and account APIs for use by external AI clients |
 
 The important AI lesson is that agent architecture is not only about getting a good answer once. It also needs observability, repeatable evaluation, clear state boundaries, and production-aware failure modes.
 
