@@ -6,6 +6,7 @@ const root = path.resolve(import.meta.dirname, "../..");
 const outputDir = path.join(root, "images", "recordings");
 const rawVideoPath = path.join(outputDir, "demo-raw.webm");
 const baseUrl = process.env.DEMO_BASE_URL ?? "http://localhost:3000";
+const demoUserName = process.env.DEMO_USER_NAME;
 
 async function waitForAssistantResponse(page, previousCount) {
   await page.waitForFunction(
@@ -91,7 +92,11 @@ const page = await context.newPage();
 
 try {
   await page.goto(baseUrl, { waitUntil: "networkidle" });
-  await page.getByRole("button").first().click();
+  if (demoUserName) {
+    await page.getByRole("button", { name: new RegExp(demoUserName, "i") }).click();
+  } else {
+    await page.getByRole("button").first().click();
+  }
   await page.waitForURL("**/store", { timeout: 20_000 });
   await page.waitForLoadState("networkidle");
   await page.waitForTimeout(900);
