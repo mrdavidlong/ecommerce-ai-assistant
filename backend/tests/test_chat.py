@@ -125,6 +125,27 @@ def test_chat_agent_error_returns_500(client: TestClient, db: Session):
     assert "LLM unavailable" in resp.json()["detail"]
 
 
+def test_chat_v2_openai_quota_error_returns_clear_message(client: TestClient, db: Session):
+    user = _seed_user(db)
+    quota_error = RuntimeError(
+        "Error code: 429 - {'error': {'message': 'You exceeded your current quota, "
+        "please check your plan and billing details.', 'type': 'insufficient_quota', "
+        "'param': None, 'code': 'insufficient_quota'}}"
+    )
+
+    with patch("app.routers.chat_v2.run_agent_v2", side_effect=quota_error):
+        resp = client.post(
+            "/v2/chat/",
+            json={"user_id": str(user.id), "message": "anything", "session_id": "s-quota"},
+        )
+
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert "LLM provider quota exceeded" in detail
+    assert "insufficient_quota" in detail
+    assert "OPENAI_API_KEY" in detail
+
+
 def test_chat_returns_cart_actions(client: TestClient, db: Session):
     user = _seed_user(db)
     cart = [

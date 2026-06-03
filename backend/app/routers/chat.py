@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from sqlalchemy.orm import Session
 
 from app.agent.agent import run_agent
 from app.db.session import get_db
+from app.routers.chat_errors import agent_error_response
 from app.schemas.chat import AgentStep, CartAction, ChatRequest, ChatResponse
 
 # Legacy unversioned chat route kept for compatibility; frontend uses /v2/chat/.
@@ -22,7 +23,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)):
             db, payload.user_id, payload.message, history
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Agent error: {e}")
+        raise agent_error_response(e)
 
     steps = [AgentStep(tool=s["tool"], input=s["input"], output=s["output"]) for s in raw_steps]
     cart_actions = [
