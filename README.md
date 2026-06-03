@@ -2,8 +2,7 @@
 
 A full-stack ecommerce demo with an agentic AI shopping assistant. Users can browse products, place orders, and chat with an AI that can search products, compare items, check balances, add items to the shopping cart, remove items from the shopping cart, and process refunds — showing its reasoning step by step.
 
-![AI Assistant on the store page](./images/ai-shopping-assistant-store-page.png)
-![AI Assistant on the order history page](./images/ai-shopping-assistant-order-history-page.png)
+![AI Assistant on the store page](./images/recordings/demo.gif)
 
 
 ## AI Techniques Demonstrated

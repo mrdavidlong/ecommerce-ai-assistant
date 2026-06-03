@@ -50,7 +50,9 @@ frontend/next-env.d.ts
 Thumbs.db
 
 # Generated demo capture intermediates
-images/recordings/
+images/recordings/*
+!images/recordings/demo.gif
+!images/recordings/demo.mp4
 
 # Claude Code
 .claude/

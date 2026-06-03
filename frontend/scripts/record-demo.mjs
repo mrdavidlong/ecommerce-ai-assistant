@@ -5,6 +5,7 @@ import { chromium } from "@playwright/test";
 const root = path.resolve(import.meta.dirname, "../..");
 const outputDir = path.join(root, "images", "recordings");
 const rawVideoPath = path.join(outputDir, "demo-raw.webm");
+const baseUrl = process.env.DEMO_BASE_URL ?? "http://localhost:3000";
 
 async function waitForAssistantResponse(page, previousCount) {
   await page.waitForFunction(
@@ -89,7 +90,7 @@ const context = await browser.newContext({
 const page = await context.newPage();
 
 try {
-  await page.goto("http://localhost:3000", { waitUntil: "networkidle" });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
   await page.getByRole("button").first().click();
   await page.waitForURL("**/store", { timeout: 20_000 });
   await page.waitForLoadState("networkidle");
@@ -100,6 +101,10 @@ try {
   let assistantCount = 0;
   assistantCount = await sendMessage(page, "What's good for video calls?", assistantCount);
   assistantCount = await sendMessage(page, "Add 2 webcams to my cart", assistantCount);
+  await page.waitForTimeout(900);
+  assistantCount = await sendMessage(page, "Add a keyboard too", assistantCount);
+  await page.waitForTimeout(900);
+  assistantCount = await sendMessage(page, "Remove the keyboard from my cart", assistantCount);
   await page.waitForTimeout(900);
   assistantCount = await sendMessage(page, "Compare AirTag and Tile Mate", assistantCount);
 
