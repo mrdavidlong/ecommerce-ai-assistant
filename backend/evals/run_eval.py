@@ -22,7 +22,12 @@ from langsmith import Client  # noqa: E402
 from langsmith.evaluation import evaluate  # noqa: E402
 
 from evals.dataset import DATASET_NAME, push_dataset  # noqa: E402
-from evals.evaluators import routing_accuracy, tool_accuracy  # noqa: E402
+from evals.evaluators import (  # noqa: E402
+    factual_accuracy,
+    helpfulness,
+    routing_accuracy,
+    tool_accuracy,
+)
 
 # Original seed stock quantities — restored before each eval run
 _SEED_STOCK = {
@@ -64,6 +69,31 @@ def reset_eval_db() -> None:
         print(f"  DB reset failed: {e}")
     finally:
         db.close()
+
+
+def embed_eval_products(db) -> int:
+    """Build the in-memory ChromaDB product index for this eval process.
+
+    The index is only populated by the FastAPI startup hook, so a standalone eval process starts
+    with an empty index and every search_products call returns "No products found".
+
+    Args:
+        db: SQLAlchemy session to read products from.
+
+    Returns:
+        Number of products embedded.
+
+    Raises:
+        RuntimeError: If the database has no products (the app has never been started to seed it).
+    """
+    from app.agent.shared import rag
+    from app.models.product import Product
+
+    products = db.query(Product).all()
+    if not products:
+        raise RuntimeError("No products in the database — start the app once to seed it.")
+    rag.embed_products(products)
+    return len(products)
 
 
 def _make_target(version: str):
@@ -127,12 +157,17 @@ def main():
     print("Resetting DB state...")
     reset_eval_db()
 
+    from app.db.session import SessionLocal
+
+    with SessionLocal() as db:
+        print(f"Embedded {embed_eval_products(db)} products into ChromaDB.")
+
     os.environ["LANGSMITH_PROJECT"] = "ecommerce-ai-assistant"
 
     results = evaluate(
         _make_target(args.version),
         data=DATASET_NAME,
-        evaluators=[routing_accuracy, tool_accuracy],
+        evaluators=[routing_accuracy, tool_accuracy, factual_accuracy, helpfulness],
         experiment_prefix=f"{args.version}-eval",
         metadata={"version": args.version},
     )
