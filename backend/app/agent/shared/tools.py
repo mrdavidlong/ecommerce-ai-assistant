@@ -13,6 +13,8 @@ from app.services.refund_service import apply_item_refund
 from app.services.user_service import get_user_by_id
 
 _REFUND_WINDOW_DAYS = 30
+# Number of products search_products returns; evals measure retrieval at this cutoff.
+SEARCH_RESULT_COUNT = 4
 
 
 def _stock_status(qty: int) -> str:
@@ -35,7 +37,7 @@ def make_tools(db: Session, user_id: str, cart_actions: list) -> list:
     def search_products(query: str) -> str:
         """Search for products using natural language. Use this when the user asks for product
         recommendations, wants to find items matching a use-case, or asks what's available."""
-        results = search_products_rag(query, n=4)
+        results = search_products_rag(query, n=SEARCH_RESULT_COUNT)
         if not results:
             return "No products found matching that query."
         # Fetch live stock from DB — ChromaDB metadata is stale after orders/refunds
