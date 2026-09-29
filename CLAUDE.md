@@ -15,9 +15,10 @@ uv run ruff check . --fix    # auto-fix lint issues
 uv run ruff format .         # format
 
 # Evaluation (requires LANGSMITH_API_KEY in .env)
-uv run python -m evals.dataset          # push 25-query dataset to LangSmith (one-time)
+uv run python -m evals.dataset          # push 21-query dataset to LangSmith (one-time)
 uv run python -m evals.run_eval --version v1   # baseline single-agent eval
 uv run python -m evals.run_eval --version v2   # multi-agent eval
+# Optional: JUDGE_MODEL env var sets the helpfulness LLM judge (defaults to LLM_MODEL)
 ```
 
 ### Frontend (`cd frontend` first)
@@ -78,8 +79,8 @@ backend/app/
 └── main.py          ← app factory, lifespan, CORS, router registration
 
 backend/evals/
-├── dataset.py       ← 25-query LangSmith dataset (push once)
-├── evaluators.py    ← routing_accuracy + tool_accuracy custom evaluators
+├── dataset.py       ← 21-query LangSmith dataset (push once)
+├── evaluators.py    ← routing_accuracy, tool_accuracy, factual_accuracy (expected_facts), helpfulness (LLM judge)
 └── run_eval.py      ← CLI runner: --version v1|v2
 ```
 

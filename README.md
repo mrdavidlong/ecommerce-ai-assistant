@@ -41,7 +41,7 @@ The app is designed to show several AI patterns in a short walkthrough:
 | 3 | Ask: "Add 2 webcams to my cart" | Tool calling mutates frontend cart state through structured `cart_actions` |
 | 4 | Ask: "Compare AirTag and Tile Mate" | Product specialist combines search/comparison tools |
 | 5 | Place an order, then ask for a refund | Multi-step account tool flow validates and applies business rules |
-| 6 | Open LangSmith eval results | Traces, routing accuracy, tool accuracy, latency, and cost comparison |
+| 6 | Open LangSmith eval results | Traces, routing/tool/factual accuracy, helpfulness, latency, and cost comparison |
 
 ## Key AI Engineering Learnings
 
@@ -55,7 +55,7 @@ The goal of this project was to learn how AI agents behave when connected to rea
 | Tool descriptions shape agent behavior | The model chooses tools based on names, schemas, and descriptions, so tool contracts need to be written carefully |
 | State should be explicit | LangGraph state separates long-lived messages from per-request outputs like `steps` and `cart_actions` |
 | Observability changes how you debug | LangSmith traces make routing decisions, tool calls, latency, and token usage inspectable |
-| Evals make agent changes comparable | v1 (single-agent) and v2 (multi-agents) can be compared on routing accuracy, tool accuracy, latency, and cost instead of ad hoc impressions |
+| Evals make agent changes comparable | v1 (single-agent) and v2 (multi-agents) can be compared on routing, tool choice, factual accuracy, helpfulness, latency, and cost instead of ad hoc impressions |
 
 ## Stack
 
@@ -752,7 +752,7 @@ App runs at `http://localhost:3000`.
 
 ## LangSmith Integration
 
-This project uses [LangSmith](https://smith.langchain.com) for two things: **automatic tracing** of every AI interaction, and **offline evaluation** of routing and tool accuracy across both the v1 and v2 agents.
+This project uses [LangSmith](https://smith.langchain.com) for two things: **automatic tracing** of every AI interaction, and **offline evaluation** of routing, tool choice, answer correctness, and helpfulness across both the v1 and v2 agents.
 
 ### Setup
 
@@ -784,14 +784,22 @@ Once the env vars are set, every chat request to `/v2/chat/` is traced automatic
 
 ### Evaluation
 
-The eval suite runs 21 test queries through v1 and v2 and measures:
+#### What we evaluate
 
-| Evaluator | What it measures |
-|---|---|
-| `routing_accuracy` | Did the supervisor route to the correct specialist (product / account / cart / general)? |
-| `tool_accuracy` | Did the specialist call the expected tool first? |
+The eval suite sends 21 hand-labelled ("golden") queries to an agent and scores each run. Each golden example lives in `backend/evals/dataset.py` and holds the user message plus the expected behaviour: the specialist that should handle it, the first tool it should call, and (for some queries) facts the answer must contain.
 
-#### Step 1 — Push the dataset to LangSmith (one-time)
+Two of the four evaluators check the agent's **process** (did it route and act correctly?); the other two check the **answer** (is it right and useful?):
+
+| Evaluator | Type | What it measures |
+|---|---|---|
+| `routing_accuracy` | Deterministic | Did the supervisor route to the expected specialist (product / account / cart / general)? Only meaningful for v2; see [v1 vs v2](#v1-vs-v2-results) |
+| `tool_accuracy` | Deterministic | Did the specialist call the expected tool first (or no tool, for chitchat)? |
+| `factual_accuracy` | Deterministic | Fraction of the example's `expected_facts` (prices, product names, the seeded balance) that appear in the response. Scored only on the 9 examples whose answer is fixed by the seed data; the rest are skipped |
+| `helpfulness` | LLM judge | A judge model rates 1-5 whether the response addresses the user's message, normalised to 0-1. Needs no reference answer. Set the judge with `JUDGE_MODEL` (defaults to `LLM_MODEL`); keep it pinned across runs so score changes come from the agents, not the judge |
+
+Why both kinds: process metrics alone can pass while the answer is wrong. While building this suite, `factual_accuracy` exposed a bug that `routing_accuracy` and `tool_accuracy` could not see: the eval process had no product index, so every search returned "No products found" and the agent told users the store had no laptops. Routing and tool choice were still perfect. The eval now builds the index before running.
+
+#### Step 1 — Push the dataset to LangSmith
 
 ```bash
 cd backend
@@ -799,6 +807,8 @@ uv run python -m evals.dataset
 ```
 
 This creates the `ecommerce-assistant-eval` dataset in your LangSmith account with 21 input/expected-output pairs.
+
+> **Warning:** the push deletes and recreates the dataset, and LangSmith deletes a dataset's experiments with it. Re-push only when the golden set changes, and re-run v1 and v2 afterwards.
 
 #### Step 2 — Run the evals
 
@@ -810,16 +820,38 @@ uv run python -m evals.run_eval --version v1
 uv run python -m evals.run_eval --version v2
 ```
 
-Each run automatically resets the database first (clears orders, restores balances and stock to seed values) so results are reproducible regardless of prior state.
+Each run first resets the database (clears orders, restores balances and stock to seed values) and builds the in-memory product search index, so results are reproducible regardless of prior state. Run v1 and v2 back to back so they share the same conditions.
 
 #### Step 3 — View results in LangSmith
 
-1. Go to **LangSmith → Datasets & Testing → ecommerce-assistant-eval**
+1. Go to **LangSmith → Datasets & Experiments → ecommerce-assistant-eval**
 2. Click the **Experiments** tab — you'll see `v1-eval-*` and `v2-eval-*` runs
-3. Click **Compare** (select both runs) to see a side-by-side metric table:
-   - `routing_accuracy`: fraction of queries routed to the correct specialist
-   - `tool_accuracy`: fraction of queries where the correct tool was called first
+3. Click **Compare** (select both runs) to see a side-by-side metric table
 4. Click any individual example row to see the full trace for that query
+
+#### v1 vs v2 results
+
+![LangSmith v1 and v2 comparison](./images/ai-shopping-assistant-langsmith-evals.png)
+
+| Metric | v1 (single agent) | v2 (multi-agent) |
+|---|---|---|
+| `tool_accuracy` | 1.00 | 1.00 |
+| `factual_accuracy` (9 examples) | 1.00 | 1.00 |
+| `helpfulness` | 0.76 | 0.80 |
+| `routing_accuracy` | n/a (shows 0.00) | 1.00 |
+| Latency p50 / p99 | 1.77s / 2.29s | 2.75s / 3.35s |
+| Input / output tokens | 23.9k / 1.4k | 13.7k / 2.1k |
+| Cost (21 queries) | $0.074 | $0.055 |
+
+**Reading the results:**
+
+- **Correctness is a tie.** Both architectures pick the right tool and report the right facts on all 21 queries. This suite cannot yet separate them on quality; that needs harder cases (multi-turn, ambiguous, account flows with real orders).
+- **`routing_accuracy` is not a v1 failure.** v1 has a single agent and no supervisor, so the eval reports its agent name as `unknown`, which can never match an expected specialist. Treat the 0.00 as "not applicable".
+- **Helpfulness: no real difference.** The 0.04 gap is within judge noise; repeated v2 runs of the same suite scored between 0.79 and 0.83. Ignore differences under about 0.05.
+- **v2 is slower (about +1s at p50).** Every v2 request makes an extra sequential LLM call (the supervisor) before the specialist starts. v1 goes straight to its tools.
+- **v2 is cheaper (about 26% less) with 43% fewer input tokens.** A v1 request sends all 8 tool schemas and one long system prompt on every LLM call of its tool loop. In v2 the supervisor call carries no tools, and each specialist carries only 2-3 tools with a short, focused prompt, so every call after the routing step is smaller. v2 spends slightly more output tokens because the supervisor also emits a structured routing decision.
+
+The trade-off: v2 buys lower cost, tighter tool scoping (a cart specialist cannot issue a refund), and an inspectable routing decision, and pays for it with latency. On this suite v2 does not yet show a quality advantage.
 
 #### Cost & Latency Tracking
 
@@ -846,19 +878,7 @@ When a user sends "take the laptop out of my cart", here's the flow:
   - **Supervisor latency**: time to classify intent + call LLM to decide routing (e.g., "this is a cart query → route to cart specialist")
   - **Specialist latency**: time for the routed agent to call tools (search_products, add_to_cart, etc.) and generate response
   - **Total latency**: supervisor + specialist + graph scheduling overhead
-- **Where to see it**: In the LangSmith experiment results table, the **Latency** column shows milliseconds (e.g., `5.37s`), and you can drill into each query to see the breakdown by node
-
-**Performance observations (v1 vs v2):**
-
-| Metric | v1 (Single-Agent) | v2 (Multi-Agent) | Why the difference? |
-|---|---|---|---|
-| **Latency** | Lower | Higher | v2 adds supervisor routing overhead (extra LLM call to classify intent). Expected trade-off: supervisor classifies quickly but adds latency vs v1's direct tool-calling |
-| **Total tokens** | Baseline | Fewer input tokens, similar/more output tokens | v2's supervisor+specialist pipeline is more token-efficient. The supervisor precisely routes to the right specialist, avoiding v1's exploratory tool calls (e.g., v1 might call search_products unnecessarily to "think"). Result: fewer redundant tokens, cleaner conversations. |
-| **Cost** | Baseline | Lower overall | Fewer input tokens + same model (GPT-4o) = lower cost per query. The supervisor's 1-step routing beats v1's multi-step reasoning in terms of token efficiency. |
-
-This is **expected behavior**: v2 trades a bit of latency (one extra supervisor LLM call) for better accuracy (correct specialist routed first) and lower cost (fewer wasted token calls exploring wrong tools). For the 21 eval queries, v2 is more efficient despite the supervisor overhead.
-
-![LangSmith v1 and v2 comparison](./images/ai-shopping-assistant-langsmith-evals.png)
+- **Where to see it**: In the LangSmith experiment results table, the **Latency** column shows seconds (e.g., `2.75s`), and you can drill into each query to see the breakdown by node
 
 #### Dataset categories
 
