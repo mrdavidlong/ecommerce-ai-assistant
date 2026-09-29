@@ -786,72 +786,155 @@ Once the env vars are set, every chat request to `/v2/chat/` is traced automatic
 
 #### What we evaluate
 
-The eval suite sends 21 hand-labelled ("golden") queries to an agent and scores each run. Each golden example lives in `backend/evals/dataset.py` and holds the user message plus the expected behaviour: the specialist that should handle it, the first tool it should call, and (for some queries) facts the answer must contain.
+The evals run at two levels, because they answer different questions:
 
-Two of the four evaluators check the agent's **process** (did it route and act correctly?); the other two check the **answer** (is it right and useful?):
+- **End-to-end** (`e2e` suite): the whole agent, with the real LLM, database, tools and search index. Answers "does the user get a good result?" It is the number that matters, but it is slow, costs the most, is noisy, and cannot say *which part* failed.
+- **Component** (`supervisor` and `retrieval` suites): one part of the system in isolation. Answers "which part broke?" It is cheap and deterministic, so it can run many more cases.
+
+| Suite | What runs | Golden set | Evaluators |
+|---|---|---|---|
+| `e2e` (`--version v1\|v2`) | Full agent, one fresh seeded database per example | 34 queries incl. multi-turn, real refunds and adversarial cases | `routing_accuracy`, `tool_accuracy`, `factual_accuracy`, `state_accuracy`, `helpfulness` |
+| `supervisor` | Only the v2 routing LLM call, no specialists | 51 queries incl. ambiguous, multi-intent, noisy and adversarial | `supervisor_route_accuracy` (+ confusion matrix) |
+| `retrieval` | Only the product vector search, at the tool's top-4 cutoff | 20 use-case, feature and synonym queries | `recall_at_k`, `hit_at_1`, `reciprocal_rank` (MRR) |
+
+The end-to-end evaluators cover the agent's **process** (did it route and act correctly?), its **answer** (is it right and useful?) and its **effects** (did the database and cart end up right?):
 
 | Evaluator | Type | What it measures |
 |---|---|---|
-| `routing_accuracy` | Deterministic | Did the supervisor route to the expected specialist (product / account / cart / general)? Only meaningful for v2; see [v1 vs v2](#v1-vs-v2-results) |
-| `tool_accuracy` | Deterministic | Did the specialist call the expected tool first (or no tool, for chitchat)? |
-| `factual_accuracy` | Deterministic | Fraction of the example's `expected_facts` (prices, product names, the seeded balance) that appear in the response. Scored only on the 9 examples whose answer is fixed by the seed data; the rest are skipped |
+| `routing_accuracy` | Deterministic | Did the supervisor route to an acceptable specialist? Skipped for v1, which has no supervisor |
+| `tool_accuracy` | Deterministic | Did the specialist call the expected tool first (or no tool, for chitchat)? Skipped where several first steps are legitimate (e.g. a refund can look up the order first or go straight to the refund tool) |
+| `factual_accuracy` | Deterministic | Fraction of the example's `expected_facts` (prices, product names, seeded balance and orders) that appear in the response. Scored only where the seed data fixes the answer |
+| `state_accuracy` | Deterministic | Did the run leave the right final state: user balance, units refunded per product, stock, cart actions? This is what catches an agent that *says* it refunded but did not, or acts when it should refuse |
 | `helpfulness` | LLM judge | A judge model rates 1-5 whether the response addresses the user's message, normalised to 0-1. Needs no reference answer. Set the judge with `JUDGE_MODEL` (defaults to `LLM_MODEL`); keep it pinned across runs so score changes come from the agents, not the judge |
 
-Why both kinds: process metrics alone can pass while the answer is wrong. While building this suite, `factual_accuracy` exposed a bug that `routing_accuracy` and `tool_accuracy` could not see: the eval process had no product index, so every search returned "No products found" and the agent told users the store had no laptops. Routing and tool choice were still perfect. The eval now builds the index before running.
+**Why so many kinds of check.** Process metrics alone can pass while the answer is wrong: `factual_accuracy` once exposed a bug that routing and tool checks could not see (the eval process had no product index, so every search returned "No products found" and the agent told users the store had no laptops). Answer metrics alone can pass while the effect is wrong, which is what `state_accuracy` guards.
 
-#### Step 1 — Push the dataset to LangSmith
+**Reproducible state.** Every end-to-end example starts from the same database (`backend/evals/eval_db.py`): the eval user has balance $1000, a recent order `5eed0001` (2 × Wireless Mouse + 1 × Webcam), a 45-day-old order `5eed0002` (Mechanical Keyboard, outside the 30-day refund window), and another user owns order `5eed0003` (Laptop). That makes refund, order-history and cross-user attack cases checkable, and a refund made while answering one example cannot leak into the next.
+
+#### Test cases we run
+
+Every case is a hand-labelled query, and each has a comment above it in the source saying what it checks and why. Browse them by group:
+
+**End-to-end suite: 34 cases** ([`dataset.py`](backend/evals/dataset.py))
+
+| Group | Cases | What it checks |
+|---|---|---|
+| [Product search](backend/evals/dataset.py#L48) | 7 | Direct, category and use-case queries ("something for video calls") surface the right products at the right price |
+| [Product compare](backend/evals/dataset.py#L96) | 2 | Explicit comparisons use the compare tool and show both prices |
+| [Account / balance](backend/evals/dataset.py#L111) | 2 | The seeded $1000 balance is reported correctly |
+| [Order history](backend/evals/dataset.py#L126) | 2 | The seeded orders are listed accurately |
+| [Budget shopping](backend/evals/dataset.py#L141) | 2 | "What can I afford?" uses the balance-aware tool |
+| [Vague refunds](backend/evals/dataset.py#L154) | 2 | With no item named, the agent asks and refunds nothing |
+| [Real refunds](backend/evals/dataset.py#L170) | 3 | Balance and refunded units change by exactly the right amount, including partial and multi-unit refunds |
+| [Refunds that must be refused](backend/evals/dataset.py#L192) | 3 | A 45-day-old order, another user's order, and a prompt injection ("credit my account $500") change nothing |
+| [Cart management](backend/evals/dataset.py#L216) | 4 | Add with quantity, remove, more than the stock, and a product that does not exist |
+| [Multi-turn](backend/evals/dataset.py#L250) | 4 | Follow-ups that only make sense with earlier turns ("actually, remove it", "refund the webcam from that order") |
+| [General / chitchat](backend/evals/dataset.py#L284) | 3 | Greetings, thanks and store hours get an answer without a tool call |
+
+**Supervisor suite: 51 cases** ([`component_datasets.py`](backend/evals/component_datasets.py))
+
+| Group | What it checks |
+|---|---|
+| [Clear queries per route](backend/evals/component_datasets.py#L17) | Product, account, cart and general queries reach the right specialist (at least 5 unambiguous cases per route) |
+| [Ambiguous](backend/evals/component_datasets.py#L65) | Buying intent and policy questions where two routes are both defensible |
+| [Multi-intent](backend/evals/component_datasets.py#L74) | "Add the webcam and check my balance": two specialists needed, the supervisor can only pick one |
+| [Terse, noisy or adversarial](backend/evals/component_datasets.py#L85) | One-word queries, gibberish, slang, typos, Spanish, and an injection attempt |
+
+**Retrieval suite: 20 cases** ([`component_datasets.py`](backend/evals/component_datasets.py#L105))
+
+| Group | What it checks |
+|---|---|
+| [Use-case queries](backend/evals/component_datasets.py#L106) | "Keep track of my keys" finds the trackers with no product name in the query |
+| [Feature queries](backend/evals/component_datasets.py#L115) | "Works with Android", "loud tracker", "backlit keys" match on product features |
+| [Synonyms and category words](backend/evals/component_datasets.py#L124) | "Portable computer" finds the Laptop, "wireless pointing device" the Mouse |
+
+#### How the evals are tested
+
+The eval code is itself tested (`cd backend && uv run pytest tests/evals -v`, about 380 tests, no LLM or LangSmith calls). Each test file is one kind of test and has a docstring saying what it guards, with comments on every case:
+
+| Kind | File | What it protects against |
+|---|---|---|
+| **Scoring**: do the evaluators score correctly? | [`test_scoring_e2e.py`](backend/tests/evals/test_scoring_e2e.py) | Wrong scores from the end-to-end evaluators, grouped as *process* (routing, tool), *answer* (factual accuracy, helpfulness with a fake judge) and *effect* (state) |
+| | [`test_scoring_component.py`](backend/tests/evals/test_scoring_component.py) | Wrong scores from the supervisor and retrieval metrics (recall, hit at 1, reciprocal rank) |
+| **Golden sets**: are the labels correct? | [`test_golden_sets.py`](backend/tests/evals/test_golden_sets.py) | Label rot: invalid routes, products or prices that no longer match the seed data, refund balances that do not add up, duplicate inputs, lost multi-turn and adversarial cases |
+| **Infrastructure**: do the helpers work? | [`test_infra_db.py`](backend/tests/evals/test_infra_db.py) | The per-example database reset, seeded orders, state snapshot and search-index build (including the empty-index bug and swallowed reset errors) |
+| | [`test_infra_sync.py`](backend/tests/evals/test_infra_sync.py) | The dataset upsert recreating datasets or deleting experiments |
+| | [`test_infra_reporting.py`](backend/tests/evals/test_infra_reporting.py) | Wrong arithmetic in the breakdown table, confusion matrix and misses list |
+
+#### Step 1 — Sync the datasets to LangSmith
 
 ```bash
 cd backend
-uv run python -m evals.dataset
+uv run python -m evals.dataset --dry-run   # show what would change, write nothing
+uv run python -m evals.dataset             # create/update the three datasets
 ```
 
-This creates the `ecommerce-assistant-eval` dataset in your LangSmith account with 21 input/expected-output pairs.
-
-> **Warning:** the push deletes and recreates the dataset, and LangSmith deletes a dataset's experiments with it. Re-push only when the golden set changes, and re-run v1 and v2 afterwards.
+The sync is an **upsert**: examples are matched on their inputs, only differences are written, and existing examples keep their ids, so experiments you already ran are preserved. Run it again whenever a golden set changes; re-run v1 and v2 afterwards so the experiments compare like with like.
 
 #### Step 2 — Run the evals
 
 ```bash
-# Baseline: single-agent (LangChain ReAct)
+# End-to-end: single agent (LangChain ReAct) vs multi-agent (LangGraph)
 uv run python -m evals.run_eval --version v1
-
-# Multi-agent (LangGraph)
 uv run python -m evals.run_eval --version v2
+
+# Component level
+uv run python -m evals.run_eval --suite supervisor
+uv run python -m evals.run_eval --suite retrieval
+
+# Show the plan (suite, dataset, evaluators, judge) without calling anything
+uv run python -m evals.run_eval --suite e2e --dry-run
 ```
 
-Each run first resets the database (clears orders, restores balances and stock to seed values) and builds the in-memory product search index, so results are reproducible regardless of prior state. Run v1 and v2 back to back so they share the same conditions.
+Run v1 and v2 back to back and never in parallel: both reset the same database before every example. After each run the CLI prints a local report: per-specialist score breakdown and the list of misses (e2e), a routing confusion matrix (supervisor), or the retrieval metrics.
 
 #### Step 3 — View results in LangSmith
 
-1. Go to **LangSmith → Datasets & Experiments → ecommerce-assistant-eval**
-2. Click the **Experiments** tab — you'll see `v1-eval-*` and `v2-eval-*` runs
-3. Click **Compare** (select both runs) to see a side-by-side metric table
+1. Go to **LangSmith → Datasets & Experiments** and open the dataset (`ecommerce-assistant-eval`, `ecommerce-supervisor-eval` or `ecommerce-retrieval-eval`)
+2. Click the **Experiments** tab — you'll see `v1-eval-*`, `v2-eval-*`, `supervisor-eval-*` and `retrieval-eval-*` runs
+3. Click **Compare** (select two runs) to see a side-by-side metric table
 4. Click any individual example row to see the full trace for that query
 
-#### v1 vs v2 results
+#### v1 vs v2 results (end-to-end, 34 queries)
 
 ![LangSmith v1 and v2 comparison](./images/ai-shopping-assistant-langsmith-evals.png)
 
+*LangSmith comparison of the 34-query suite (`v1-eval-f2c0bacd` vs `v2-eval-cafe596f`): A is v1, B is v2. The cost chart is cut off at the right edge of the page.*
+
 | Metric | v1 (single agent) | v2 (multi-agent) |
 |---|---|---|
-| `tool_accuracy` | 1.00 | 1.00 |
-| `factual_accuracy` (9 examples) | 1.00 | 1.00 |
-| `helpfulness` | 0.76 | 0.80 |
-| `routing_accuracy` | n/a (shows 0.00) | 1.00 |
-| Latency p50 / p99 | 1.77s / 2.29s | 2.75s / 3.35s |
-| Input / output tokens | 23.9k / 1.4k | 13.7k / 2.1k |
-| Cost (21 queries) | $0.074 | $0.055 |
+| `tool_accuracy` (27 scored) | 1.00 | 1.00 |
+| `factual_accuracy` (15 scored) | 1.00 | 1.00 |
+| `state_accuracy` (15 scored) | 0.93 | 1.00 |
+| `helpfulness` | 0.79 | 0.89 |
+| `routing_accuracy` | skipped (no supervisor) | 1.00 |
+| Latency p50 / p99 | 1.95s / 3.49s | 2.80s / 6.75s |
+| Input / output tokens | 48.3k / 2.7k | 31.4k / 3.8k |
+| Cost (34 queries) | $0.148 | $0.117 |
+
+Latency, tokens and cost include the replayed earlier turns of the 4 multi-turn examples, so they are not comparable with numbers from the older 21-query suite.
 
 **Reading the results:**
 
-- **Correctness is a tie.** Both architectures pick the right tool and report the right facts on all 21 queries. This suite cannot yet separate them on quality; that needs harder cases (multi-turn, ambiguous, account flows with real orders).
-- **`routing_accuracy` is not a v1 failure.** v1 has a single agent and no supervisor, so the eval reports its agent name as `unknown`, which can never match an expected specialist. Treat the 0.00 as "not applicable".
-- **Helpfulness: no real difference.** The 0.04 gap is within judge noise; repeated v2 runs of the same suite scored between 0.79 and 0.83. Ignore differences under about 0.05.
-- **v2 is slower (about +1s at p50).** Every v2 request makes an extra sequential LLM call (the supervisor) before the specialist starts. v1 goes straight to its tools.
-- **v2 is cheaper (about 26% less) with 43% fewer input tokens.** A v1 request sends all 8 tool schemas and one long system prompt on every LLM call of its tool loop. In v2 the supervisor call carries no tools, and each specialist carries only 2-3 tools with a short, focused prompt, so every call after the routing step is smaller. v2 spends slightly more output tokens because the supervisor also emits a structured routing decision.
+- **The harder suite now separates the architectures.** On the original 21 easy queries both scored 1.00 on tool and factual accuracy. With real state, multi-turn and adversarial cases, v1 makes mistakes that v2 does not. The clearest: asked to "add it to my cart" after discussing the laptop, v1 replies "please specify the brand or model" and adds nothing (`state_accuracy` 0), where v2's cart specialist resolves the product and adds it. In an earlier run v1 also asked for the brand on "add 50 laptops to my cart" (it did not in the final run), so treat any single miss as noisy; each example is one sample.
+- **Helpfulness: v2 leads by 0.10.** That is larger than the judge noise seen earlier (about ±0.04), and is consistent with the same behaviour: v1 asks clarifying questions in cases where v2 acts (its cart-query helpfulness is 0.75 vs 1.00). The judge sees only the response, not the tool outputs, so it cannot tell a correct answer from a fluent wrong one; an earlier v1 run also invented a "smartphone" order that was not in the history. A faithfulness check against tool outputs is the next evaluator worth adding.
+- **v2 is slower (about +0.9s at p50).** Every v2 request makes an extra sequential LLM call (the supervisor) before the specialist starts. v1 goes straight to its tools.
+- **v2 is cheaper (about 21% less) with 35% fewer input tokens.** A v1 request sends all 8 tool schemas and one long system prompt on every LLM call of its tool loop. In v2 the supervisor call carries no tools, and each specialist carries only 2-3 tools with a short, focused prompt. v2 spends more output tokens because the supervisor also emits a structured routing decision.
 
-The trade-off: v2 buys lower cost, tighter tool scoping (a cart specialist cannot issue a refund), and an inspectable routing decision, and pays for it with latency. On this suite v2 does not yet show a quality advantage.
+The trade-off: v2 buys lower cost, tighter tool scoping (a cart specialist cannot issue a refund), an inspectable routing decision and, on this suite, better behaviour on multi-turn and cart requests, and pays for it with latency.
+
+#### Component results
+
+| Suite | Result | What it found |
+|---|---|---|
+| `supervisor` (51 queries) | 50 / 51 correct | One real miss: "what's the best way to keep track of my keys?" was routed to `general` instead of `product`. Advice-style phrasing without a product word is the supervisor's weak spot. Everything else, including ambiguous and multi-intent queries, landed on an acceptable route |
+| `retrieval` (20 queries) | `hit_at_1` 0.95, MRR 0.97, `recall_at_k` 1.00 | One real miss: "more ports for my laptop" ranks the Laptop above the USB-C Hub. `recall_at_k` is saturated because the store has 8 products and the tool returns 4, so `hit_at_1` and MRR are the metrics that discriminate |
+
+Because these run in seconds and cost almost nothing, they are the right place to iterate on the supervisor prompt or the embedding text, then confirm with the end-to-end suite.
+
+#### Reading a miss
+
+An eval failure is either a bug in the agent or a mistake in the label. While building the e2e set both showed up: two refund examples expected `process_item_refund` as the first tool, but both agents sensibly looked up the order history first (a label mistake, fixed by dropping the tool check and letting `state_accuracy` decide), while v1 asking "which brand?" was a genuine agent failure. Read the trace before changing either side.
 
 #### Cost & Latency Tracking
 
@@ -869,7 +952,7 @@ When a user sends "take the laptop out of my cart", here's the flow:
 - For each call, it captures token counts: `input_tokens` and `output_tokens`
 - Cost formula: `(input_tokens × input_price_per_1k) + (output_tokens × output_price_per_1k)`
 - **Pricing source**: OpenAI's official pricing (e.g., GPT-4o: $5/1M input tokens, $15/1M output tokens as of 2024). Prices are configured in your LangSmith account settings → **Pricing** tab. You can update them if OpenAI's pricing changes, or customize for different models/providers.
-- **Total cost per run**: sum of costs across all 21 eval queries
+- **Total cost per run**: sum of costs across all queries in the eval run
 - **Example**: a query routing to product specialist might call: supervisor (1.5k input, 50 output) + search_products (300 input, 200 output) + embeddings (50 input, 0 output). LangSmith sums all three.
 
 **Latency Measurement:**
@@ -879,19 +962,6 @@ When a user sends "take the laptop out of my cart", here's the flow:
   - **Specialist latency**: time for the routed agent to call tools (search_products, add_to_cart, etc.) and generate response
   - **Total latency**: supervisor + specialist + graph scheduling overhead
 - **Where to see it**: In the LangSmith experiment results table, the **Latency** column shows seconds (e.g., `2.75s`), and you can drill into each query to see the breakdown by node
-
-#### Dataset categories
-
-| Category | Count | Expected agent |
-|---|---|---|
-| Product Search | 7 | product |
-| Product Compare | 2 | product |
-| Account / Balance | 4 | account |
-| Budget Shopping | 2 | product |
-| Refunds | 2 | account |
-| Cart Management | 1 | cart |
-| General / Chitchat | 3 | general |
-| **Total** | **21** | |
 
 ---
 
@@ -922,7 +992,7 @@ This is intentionally a focused demo, but the implementation calls out where a p
 | Auth | Demo user selected from seeded accounts | Secure sessions, OAuth, or JWT/cookie-based auth |
 | Cart state | Client-side cart updated by AI `cart_actions` | Server-backed cart with idempotency and inventory reservation |
 | Refunds/orders | SQLite transaction in a demo database | Stronger audit trails, permissions, payment integration, and reconciliation |
-| Evals | 21 representative queries | Larger regression set with edge cases, adversarial prompts, and scenario-level success metrics |
+| Evals | 34 end-to-end, 51 supervisor and 20 retrieval queries, single run per example | Larger regression set, repeated runs for variance, faithfulness checks against tool outputs, and evals on production traffic samples |
 | Latency | Sequential supervisor then specialist call | Model selection, caching, streaming, or parallel retrieval where appropriate |
 | Prompt-injection defenses | Basic role prompts and scoped specialist tools only | Instruction-conflict handling, stricter tool-call policies, audit logs, and adversarial eval cases |
 | External tool integration | App-local LangChain tools | MCP server exposing product, order, and account APIs for use by external AI clients |

@@ -10,14 +10,19 @@ uv sync --extra dev          # install dependencies
 uv run uvicorn app.main:app --reload  # start dev server (http://localhost:8000)
 uv run pytest tests/ -v      # run all tests
 uv run pytest tests/test_users.py::test_get_user_by_id_returns_correct_user -v  # run single test
+uv run pytest tests/evals -v   # eval code: scoring, golden-set integrity, infrastructure (see README)
 uv run ruff check .          # lint
 uv run ruff check . --fix    # auto-fix lint issues
 uv run ruff format .         # format
 
 # Evaluation (requires LANGSMITH_API_KEY in .env)
-uv run python -m evals.dataset          # push 21-query dataset to LangSmith (one-time)
-uv run python -m evals.run_eval --version v1   # baseline single-agent eval
-uv run python -m evals.run_eval --version v2   # multi-agent eval
+uv run python -m evals.dataset                 # upsert the 3 datasets (e2e 34, supervisor 51, retrieval 20); experiments kept
+uv run python -m evals.dataset --dry-run       # show the diff, write nothing
+uv run python -m evals.run_eval --version v1   # e2e baseline single-agent eval
+uv run python -m evals.run_eval --version v2   # e2e multi-agent eval (run v1/v2 sequentially, never in parallel)
+uv run python -m evals.run_eval --suite supervisor   # component: routing only (+ confusion matrix)
+uv run python -m evals.run_eval --suite retrieval    # component: vector search (recall@k, hit@1, MRR)
+uv run python -m evals.run_eval --suite e2e --dry-run  # print the plan, call nothing
 # Optional: JUDGE_MODEL env var sets the helpfulness LLM judge (defaults to LLM_MODEL)
 ```
 
@@ -79,9 +84,13 @@ backend/app/
 └── main.py          ← app factory, lifespan, CORS, router registration
 
 backend/evals/
-├── dataset.py       ← 21-query LangSmith dataset (push once)
-├── evaluators.py    ← routing_accuracy, tool_accuracy, factual_accuracy (expected_facts), helpfulness (LLM judge)
-└── run_eval.py      ← CLI runner: --version v1|v2
+├── dataset.py            ← e2e golden set (34: multi-turn, refunds, adversarial) + sync_all()
+├── component_datasets.py ← supervisor (51) and retrieval (20) golden sets
+├── evaluators.py         ← routing/tool/factual/state accuracy, helpfulness (LLM judge), supervisor + retrieval metrics
+├── eval_db.py            ← reset DB + seed orders per example, snapshot_state(), embed_eval_products()
+├── sync.py               ← sync_dataset(): upsert by inputs, preserves experiments
+├── reporting.py          ← per-group breakdown, confusion matrix, list_misses
+└── run_eval.py           ← CLI runner: --suite e2e|supervisor|retrieval, --version v1|v2, --dry-run
 ```
 
 **Base model**: Every ORM model inherits `Base` from `app/db/base.py`, which provides `id` (UUID, auto-generated), `created_at` (UTC), and `updated_at` (UTC, auto-updated on change). Never define these manually on a model.
