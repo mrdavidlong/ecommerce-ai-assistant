@@ -199,6 +199,18 @@ return {
 }
 ```
 
+#### What a route label is
+
+A **route label** is one of four short strings, `"product"`, `"account"`, `"cart"` or `"general"`, and it is the supervisor's entire decision. It moves through the system in three steps:
+
+| Step | Code | Example |
+|---|---|---|
+| 1. The LLM can only answer with one of the four labels | `SupervisorDecision.route: Literal["product", "account", "cart", "general"]` in `state.py` | "do you have a webcam?" → `route="product"`, `reasoning="User is asking about product availability"` |
+| 2. The supervisor saves the label in shared state | `return {"agent_name": decision.route, ...}` in `supervisor.py` | `state["agent_name"] = "product"` |
+| 3. LangGraph maps the label to the next node | the `add_conditional_edges` mapping in `graph.py` | `"product"` → run `product_agent` |
+
+The same `agent_name` is also returned to the frontend as the "Handled by: Product Specialist" badge. The `reasoning` only goes into the Thinking UI. **No instructions or task text go to the specialist.** The label decides which specialist runs, and that specialist then reads the same full conversation any agent would (see [How context is passed](#how-context-is-passed-from-the-supervisor-to-a-specialist)).
+
 `ShoppingState` is the shared state object moving through the graph:
 
 ```python
@@ -346,6 +358,54 @@ INNER (create_agent)                            ▼                          │
 The tradeoff is at least one more supervisor LLM call on every turn, which adds latency and cost, plus a risk of routing loops. A loop needs a guard, such as LangGraph's `recursion_limit` or a hop counter in state. For this store, almost every message has a single intent, so the current single-hop design is the cheaper default.
 
 `POST /v1/chat/` still exists as a simpler single-agent path in `backend/app/agent/v1/agent.py`: it builds one LangChain agent with all tools and keeps history in the v1 router's `_history` dict. v2 is the main/default flow used by the frontend.
+
+### How context is passed from the supervisor to a specialist
+
+The supervisor does not write a handoff message or a task brief. Every agent reads the same shared `ShoppingState`, and the only thing the supervisor adds to it is a route label. So **each specialist gets the whole conversation for the session, unfiltered and untrimmed.**
+
+```python
+# backend/app/agent/v2/agents/supervisor.py — the supervisor reads every message...
+decision = router_llm.invoke([SystemMessage(content=_SYSTEM)] + state["messages"])
+return {"agent_name": decision.route, "steps": ...}   # ...and writes only a label (plus a UI step)
+
+# backend/app/agent/v2/agents/product.py — the specialist receives the full state
+result = agent.invoke(state)                           # state["messages"] = the whole thread
+
+# backend/app/agent/v2/agents/general.py — same for the tool-less general agent
+response = llm.invoke([SystemMessage(content=_SYSTEM)] + state["messages"])
+```
+
+What "the whole conversation" contains:
+
+| In `state["messages"]` | Why it's there |
+|---|---|
+| Every `HumanMessage` from earlier turns | `MemorySaver` restores the thread by `session_id`, and `add_messages` appends the new one |
+| Every specialist's `AIMessage` with `tool_calls` and every `ToolMessage` (raw tool output) from earlier turns | Specialists return `result["messages"]`, which includes their whole tool loop, so it is stored in the thread |
+| Every final assistant reply | Same |
+
+What is **not** passed:
+
+- **The supervisor's `reasoning`.** It only goes into `steps` for the Thinking UI and never into `messages`, so the specialist doesn't know why it was picked.
+- **Any history limit.** Nothing in `backend/app` trims or summarizes messages. Each specialist only adds its own system prompt, which isn't stored in the thread.
+
+#### Consequences today
+
+- **Good for follow-ups.** "Refund the second one" works because the account specialist can see the earlier `get_order_history` `ToolMessage` with the order IDs, even when another specialist produced it.
+- **Prompt size grows every turn.** Tool outputs such as product search results stay in the thread forever, and every LLM call in the turn resends them: the supervisor call and each iteration of the specialist's tool loop. Cost and latency rise with session length, and a long enough session would eventually hit the model's context limit.
+- **The supervisor reads tool traffic it doesn't need.** To classify the newest message, it gets raw JSON from earlier tool calls, which costs tokens and can distract the router.
+- **Specialists see other specialists' tool calls.** For example, the cart agent sees `process_item_refund` calls it cannot make. So far this hasn't caused misses in the evals, but it is noise.
+
+#### Ways to improve it
+
+| Option | How | Pros | Cons |
+|---|---|---|---|
+| **1. Trim to a token budget** | `trim_messages` (langchain-core) before each LLM call, keeping the newest turns that fit a named budget | Caps cost and latency; one-line change per agent; no extra LLM calls | Loses older context, so "the laptop I asked about earlier" can break; must cut on turn boundaries so a `ToolMessage` isn't separated from its `tool_calls` |
+| **2. A separate view for the supervisor** | Pass the supervisor only `HumanMessage`s and final assistant replies, with no tool traffic | Smaller, cleaner routing prompt; specialists keep everything | Supervisor can't use facts that exist only in tool output (rarely needed for routing) |
+| **3. Summarize older turns** | `SummarizationMiddleware` on `create_agent`, or a summarize step in the graph | Keeps the gist of long sessions at bounded size | Extra LLM call when it triggers; lossy (IDs and prices can get dropped); summaries can introduce errors |
+| **4. Supervisor handoff brief** | Extend `SupervisorDecision` with a `task` field (e.g. "refund the mouse from order 5eed0001") and give the specialist the brief plus the latest turns | Specialist is focused; needed by the [multi-hop supervisor](tasks/backlog/multi-hop-supervisor.md), where each hop gets a sub-task | More supervisor output tokens; a wrong brief leads the specialist astray; needs an eval for brief quality |
+| **5. Structured memory in state** | Keep key entities in `ShoppingState` (`referenced_order_ids`, `last_viewed_products`) and drop old raw tool output | Compact and exact for follow-up references; holds up under trimming | Schema to design and maintain per domain; tools or nodes must write it reliably |
+
+**Recommended order:** 2 then 1 first, because both are cheap, deterministic and easy to measure with the existing evals. Then 4 together with the multi-hop work. 3 and 5 only matter once sessions get long in real traffic. This is tracked in [`tasks/backlog/context-scoping.md`](tasks/backlog/context-scoping.md).
 
 ### How intermediate steps are extracted
 
