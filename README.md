@@ -242,6 +242,109 @@ Inside a specialist, `create_agent` tells the LLM about those tools — their na
 └─────────────────────────────────────────────────┘
 ```
 
+### One specialist per turn: control never returns to the supervisor
+
+The supervisor routes exactly once per user message, and the chosen specialist's answer goes straight back to the caller. Two parts of the code enforce this:
+
+```python
+# backend/app/agent/v2/state.py — the supervisor can only emit ONE route
+class SupervisorDecision(BaseModel):
+    route: Literal["product", "account", "cart", "general"]
+    reasoning: str
+
+# backend/app/agent/v2/graph.py — every specialist has a fixed edge to END
+for node in ("product_agent", "account_agent", "cart_agent", "general_agent"):
+    builder.add_edge(node, END)
+```
+
+No edge leads from a specialist back to `supervisor_agent`, so a turn always follows this path:
+
+```
+caller ──► run_agent_v2 ──► graph.invoke()
+                               │
+                               ▼
+                        supervisor_agent        (1 LLM call, structured output, no tools)
+                               │ agent_name = "product"
+                               ▼
+                         product_agent          (ReAct loop: LLM ⇄ tools, N iterations)
+                               │
+                               ▼
+                              END ──► final_state ──► run_agent_v2 returns
+                                                      (last AIMessage = response)
+```
+
+The tool loop happens inside the specialist, not between agents. A specialist can call several of its own tools before it answers, for example `search_products` followed by `add_to_cart`. It cannot hand off to another specialist.
+
+#### Where that loop lives: two graphs, one nested in the other
+
+The repo has no visible loop because it is part of LangChain's `create_agent()`. That function builds a small LangGraph graph of its own, and the specialist runs it in a single `agent.invoke()` call:
+
+```python
+# backend/app/agent/v2/agents/product.py
+agent = create_agent(llm, tools, system_prompt=_SYSTEM)   # builds the inner graph
+
+def product_node(state: ShoppingState) -> dict:
+    result = agent.invoke(state)   # the whole model ⇄ tools loop runs inside this call
+```
+
+The outer graph sees `product_agent` as one node. The graph inside that node is wired like this (`langchain/agents/factory.py` in langchain 1.2.15; with no middleware and no `response_format`, the loop's entry node is `"model"` and its exit is `END`):
+
+```python
+# langchain/agents/factory.py — create_agent()
+graph.add_node("model", ...)        # one LLM call
+graph.add_node("tools", tool_node)  # runs the tool calls the LLM asked for
+graph.add_conditional_edges("tools", _make_tools_to_model_edge(...), ...)
+graph.add_conditional_edges("model", _make_model_to_tools_edge(...), ...)
+```
+
+Two edge functions close the cycle:
+
+```python
+# model → tools, or exit: the stop condition
+def model_to_tools(state):
+    if len(last_ai_message.tool_calls) == 0:
+        return end_destination                     # the LLM answered in plain text, so stop
+    if pending_tool_calls:
+        return [Send("tools", ...) for tool_call in pending_tool_calls]
+
+# tools → model: feed the tool results back to the LLM
+def tools_to_model(state):
+    if all executed tools have return_direct=True:  # none of our tools set it
+        return end_destination
+    return model_destination                       # default: continue the loop
+```
+
+Here is one turn for "add the webcam to my cart", showing both levels:
+
+```
+OUTER (graph.py)        supervisor_agent ──► cart_agent ─────────────────────────► END
+                                                │                          ▲
+INNER (create_agent)                            ▼                          │
+                        model  → AIMessage(tool_calls=[search_products])   │
+                          ▼                                                │
+                        tools  → ToolMessage("Webcam HD 1080p ...")        │
+                          ▼                                                │
+                        model  → AIMessage(tool_calls=[add_to_cart])       │
+                          ▼                                                │
+                        tools  → ToolMessage("Added ...")                  │
+                          ▼                                                │
+                        model  → AIMessage("Added it to your cart.")  ─────┘
+                                 (no tool_calls, so the inner graph exits)
+```
+
+- **Outer graph** (`backend/app/agent/v2/graph.py`): supervisor → one specialist → `END`. It has no cycle.
+- **Inner graph** (built by `create_agent` in each specialist): `model ⇄ tools` repeats until the LLM replies without calling a tool. The `general` agent has no tools, so it makes a single LLM call and never loops.
+
+**Consequence: multi-intent messages are only half handled.** "Add the webcam and check my balance" goes to one specialist, so only one of the two requests is served. The supervisor eval set includes these cases on purpose (see [Test cases we run](#test-cases-we-run)).
+
+**How it could be extended.** This work is tracked in [`tasks/backlog/multi-hop-supervisor.md`](tasks/backlog/multi-hop-supervisor.md). Turning this into a multi-hop supervisor takes three changes:
+
+1. Point each specialist edge back to the supervisor: `builder.add_edge(node, "supervisor_agent")`.
+2. Add a `"finish"` route to `SupervisorDecision` and map it to `END` in `add_conditional_edges`.
+3. Tell the supervisor prompt to choose `finish` once every intent has been served.
+
+The tradeoff is at least one more supervisor LLM call on every turn, which adds latency and cost, plus a risk of routing loops. A loop needs a guard, such as LangGraph's `recursion_limit` or a hop counter in state. For this store, almost every message has a single intent, so the current single-hop design is the cheaper default.
+
 `POST /v1/chat/` still exists as a simpler single-agent path in `backend/app/agent/v1/agent.py`: it builds one LangChain agent with all tools and keeps history in the v1 router's `_history` dict. v2 is the main/default flow used by the frontend.
 
 ### How intermediate steps are extracted
